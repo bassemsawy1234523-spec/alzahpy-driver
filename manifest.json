@@ -3,8 +3,8 @@
   "short_name": "سائق الأسطول",
   "start_url": "index.html",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#ffffff",
+  "theme_color": "#b8860b",
   "icons": [
     {
       "src": "https://cdn-icons-png.flaticon.com/512/3062/3062634.png",
