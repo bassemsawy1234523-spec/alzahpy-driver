@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>الأسطول الذهبي - السائق</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{font-family:Cairo,Tahoma,Arial,sans-serif;background:#f3f4f6;color:#1f2937}
+  .hiddenx{display:none!important}
+  .card{background:#fff;border-radius:20px;box-shadow:0 5px 18px rgba(0,0,0,.07)}
+  .field{width:100%;border:1px solid #d1d5db;border-radius:14px;padding:12px 14px;background:#fff;outline:none}
+  .field:focus{border-color:#b8860b;box-shadow:0 0 0 3px rgba(184,134,11,.12)}
+  .btn{border:0;border-radius:14px;padding:12px 16px;font-weight:800;cursor:pointer}
+  .btn-primary{background:#b8860b;color:#fff}
+  .btn-dark{background:#111827;color:#fff}
+  .btn-green{background:#15803d;color:#fff}
+  .btn-red{background:#dc2626;color:#fff}
+  .btn-gray{background:#e5e7eb;color:#374151}
+  .btn-blue{background:#2563eb;color:#fff}
+  .small{font-size:12px;color:#6b7280}
+  .label{display:block;font-weight:800;margin-bottom:6px;font-size:13px}
+  .nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e5e7eb;z-index:20}
+  .nav button{flex:1;padding:10px 4px;font-size:12px;color:#6b7280}
+  .nav button.active{color:#b8860b;font-weight:900}
+  .badge{display:inline-block;border-radius:999px;padding:5px 10px;font-size:11px;font-weight:900}
+  .available{background:#dcfce7;color:#166534}.booked{background:#fef3c7;color:#92400e}
+  .closed{background:#e5e7eb;color:#4b5563}.open{background:#dbeafe;color:#1d4ed8}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+  .sheet{background:#fff;border-radius:25px 25px 0 0;width:100%;max-height:90vh;overflow:auto;padding:20px}
+  @media(min-width:700px){.sheet{max-width:650px;border-radius:25px;margin-bottom:30px}}
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<section id="loginScreen" class="min-h-screen flex items-center justify-center p-5">
+  <div class="card w-full max-w-md p-7 text-center">
+    <div class="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-br from-yellow-500 to-yellow-700 flex items-center justify-center text-white text-4xl shadow-lg">🚕</div>
+    <h1 class="text-2xl font-black mt-5">الأسطول الذهبي</h1>
+    <p class="text-gray-500 mt-1">تطبيق السائق</p>
+    <div class="text-right mt-6">
+      <label class="label">رقم السائق</label>
+      <input id="loginPhone" class="field" inputmode="tel" placeholder="اكتب رقم السائق">
+      <label class="label mt-4">كلمة السر</label>
+      <input id="loginPass" class="field" type="password" placeholder="كلمة السر">
+    </div>
+    <button id="loginBtn" class="btn btn-primary w-full mt-5">دخول</button>
+    <p class="small mt-4">كلمة السر خاصة بكل سائق ويمكن تغييرها من «حسابي».</p>
+  </div>
+</section>
+
+<!-- App -->
+<section id="appScreen" class="hiddenx min-h-screen pb-20">
+  <header class="bg-white sticky top-0 z-10 shadow-sm px-4 py-3 flex items-center justify-between">
+    <div>
+      <div class="font-black">الأسطول الذهبي</div>
+      <div id="driverHeader" class="small"></div>
+    </div>
+    <button id="logoutBtn" class="btn btn-gray text-xs">خروج</button>
+  </header>
+  <main id="view" class="p-4"></main>
+
+  <nav class="nav flex">
+    <button data-view="available" class="active">📍<br>الرحلات</button>
+    <button data-view="shift">🚦<br>ورديتي</button>
+    <button data-view="account">👤<br>حسابي</button>
+  </nav>
+</section>
+
+<div id="modal" class="hiddenx modal"><div id="modalSheet" class="sheet"></div></div>
+<div id="toast" class="fixed top-4 left-4 right-4 z-[100] hiddenx">
+  <div id="toastText" class="mx-auto max-w-md rounded-2xl px-4 py-3 bg-gray-900 text-white text-center font-bold shadow-xl"></div>
+</div>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import {getDatabase, ref, get, set, update, push, onValue, runTransaction} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+import {getAuth, signInAnonymously, onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyC2kISqD9SEhnNujTK9nrQ0XuvLTDyYk",
+  authDomain: "beesw-al-sawy.firebaseapp.com",
+  databaseURL: "https://fleetsmart-2513b-default-rtdb.firebaseio.com",
+  projectId: "beesw-al-sawy",
+  storageBucket: "beesw-al-sawy.appspot.com",
+  messagingSenderId: "313509851153",
+  appId: "1:313509851153:web:57cf94a12f32a6f57901b0"
+};
+
+
+const app=initializeApp(firebaseConfig);
+const db=getDatabase(app);
+const auth=getAuth(app);
+
+const state={
+  driver:null,
+  view:"available",
+  data:{drivers:{},cars:{},availableTrips:{},shifts:{},trips:{},expenses:{},settings:{}},
+  unsub:[]
+};
+
+const $=id=>document.getElementById(id);
+const vals=o=>Object.values(o||{});
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const num=id=>Number($(id)?.value||0);
+const val=id=>$(id)?.value?.trim()||"";
+const money=n=>new Intl.NumberFormat("ar-EG",{minimumFractionDigits:0,maximumFractionDigits:2}).format(Number(n||0))+" ج";
+const now=()=>Date.now();
+const dateTime=t=>t?new Intl.DateTimeFormat("ar-EG",{dateStyle:"medium",timeStyle:"short"}).format(new Date(t)):"—";
+
+function toast(msg,bad=false){
+  $("toastText").textContent=msg;
+  $("toastText").style.background=bad?"#b91c1c":"#111827";
+  $("toast").classList.remove("hiddenx");
+  setTimeout(()=>$("toast").classList.add("hiddenx"),2500);
+}
+function modal(x){$("modalSheet").innerHTML=x;$("modal").classList.remove("hiddenx")}
+function closeModal(){$("modal").classList.add("hiddenx");$("modalSheet").innerHTML=""}
+window.closeModal=closeModal;
+
+function sha256(text){
+  const data=new TextEncoder().encode(text);
+  return crypto.subtle.digest("SHA-256",data).then(buf=>[...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,"0")).join(""));
+}
+
+async function login(){
+  const phone=val("loginPhone"), pass=val("loginPass");
+  if(!phone||!pass)return toast("اكتب رقم السائق وكلمة السر",true);
+  const snap=await get(ref(db,"drivers"));
+  const drivers=snap.val()||{};
+  const found=vals(drivers).find(d=>String(d.phone||"")===phone || vals(d.phones||{}).some(x=>String(x)===phone));
+  if(!found)return toast("رقم السائق غير موجود",true);
+  const hash=await sha256(pass);
+  // Supports both the new passwordHash field and a temporary legacy password field.
+  if(found.passwordHash && found.passwordHash!==hash)return toast("كلمة السر غير صحيحة",true);
+  if(!found.passwordHash && found.password && found.password!==pass)return toast("كلمة السر غير صحيحة",true);
+  state.driver={...found,id:found.id};
+  localStorage.setItem("goldenFleetDriver",found.id);
+  startListeners();
+  showApp();
+}
+
+async function restoreLogin(){
+  const id=localStorage.getItem("goldenFleetDriver");
+  if(!id)return;
+  const s=await get(ref(db,"drivers/"+id));
+  if(s.exists()){state.driver={...s.val(),id};startListeners();showApp();}
+}
+
+function startListeners(){
+  state.unsub.forEach(u=>u&&u());
+  state.unsub=[];
+  const paths=["drivers","cars","availableTrips","shifts","trips","expenses"];
+  for(const p of paths){
+    const u=onValue(ref(db,p),snap=>{state.data[p]=snap.val()||{}; if(p==="drivers"&&state.driver?.id&&state.data.drivers[state.driver.id])state.driver={...state.data.drivers[state.driver.id],id:state.driver.id}; render();});
+    state.unsub.push(u);
+  }
+}
+
+function showApp(){
+  $("loginScreen").classList.add("hiddenx");
+  $("appScreen").classList.remove("hiddenx");
+  $("driverHeader").textContent=state.driver?.name||"السائق";
+  render();
+}
+
+function activeShift(){
+  return vals(state.data.shifts).find(s=>
+    s.driverId===state.driver?.id &&
+    (s.status==="مفتوحة"||s.status==="مفتوحه"||s.status==="open") &&
+    !s.endedAt
+  );
+}
+
+function render(){
+  if(!state.driver)return;
+  $("driverHeader").textContent=state.driver.name||"السائق";
+  document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.view===state.view));
+  if(state.view==="available")renderAvailable();
+  if(state.view==="shift")renderShift();
+  if(state.view==="account")renderAccount();
+}
+
+function renderAvailable(){
+  const list=vals(state.data.availableTrips).filter(t=>t.status==="متاحة").sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
+  $("view").innerHTML=`
+    <div class="mb-4">
+      <h2 class="text-2xl font-black">الرحلات المتاحة</h2>
+      <p class="small mt-1">استلم الرحلة المناسبة لك. بعد الاستلام تصبح محجوزة لك فورًا.</p>
+    </div>
+    ${!activeShift()?`<div class="card p-4 mb-4 border border-amber-200 bg-amber-50">
+      <b>⚠️ لا توجد وردية مفتوحة</b><p class="small mt-1">افتح ورديتك أولًا من تبويب «ورديتي» حتى تستطيع استلام رحلة.</p>
+      <button class="btn btn-primary mt-3" data-go="shift">فتح وردية</button>
+    </div>`:""}
+    <div class="grid gap-4">${list.map(t=>tripCard(t)).join("")||`<div class="card p-6 text-center text-gray-500">لا توجد رحلات متاحة الآن.</div>`}</div>`;
+  $("view").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{state.view=b.dataset.go;render()});
+  $("view").querySelectorAll("[data-trip]").forEach(b=>b.onclick=()=>tripDetails(b.dataset.trip));
+}
+
+function tripCard(t){
+  const d=distanceText(t);
+  return `<div class="card p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div><div class="font-black text-lg">${esc(t.customerName||"عميل")}</div><div class="small">${dateTime(t.tripAt)}</div></div>
+      <div class="text-left"><div class="font-black text-lg">${money(t.amount)}</div><span class="badge available">متاحة</span></div>
+    </div>
+    <div class="mt-4 space-y-2 text-sm">
+      <div>📍 <b>الإقلاع:</b> ${esc(t.pickupAddress||"")}</div>
+      <div>🏁 <b>النزول:</b> ${esc(t.dropoffAddress||"")}</div>
+      <div id="dist_${esc(t.id)}" class="small">${d}</div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 mt-4">
+      <button class="btn btn-blue" data-trip="${esc(t.id)}">تفاصيل</button>
+      <button class="btn btn-green" data-nav="${esc(t.id)}">📍 فتح الملاحة</button>
+    </div>
+  </div>`;
+}
+
+function distanceText(t){
+  if(!navigator.geolocation)return "فعّل الموقع في الهاتف لحساب موقعك الحالي.";
+  return "جاري تحديد موقعك الحالي…";
+}
+
+async function updateDistance(id){
+  const t=state.data.availableTrips[id];
+  if(!t||!navigator.geolocation)return;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const o={lat:pos.coords.latitude,lon:pos.coords.longitude};
+    // Browser-only fallback: straight-line distance is NOT presented as driving distance.
+    const dest=parseLatLng(t.pickupLat,t.pickupLng);
+    const el=$("dist_"+id);
+    if(!el)return;
+    if(dest){
+      const km=haversine(o.lat,o.lon,dest.lat,dest.lon);
+      el.textContent=`📡 المسافة المباشرة من موقعك: ${km.toFixed(1)} كم — افتح الملاحة لمعرفة الطريق والوقت الفعلي في Google Maps.`;
+    }else{
+      el.textContent="📡 تم تحديد موقعك. اضغط «فتح الملاحة» لمعرفة المسافة والوقت الفعلي للطريق في Google Maps.";
+    }
+  },()=>{const el=$("dist_"+id);if(el)el.textContent="⚠️ اسمح للتطبيق بالوصول إلى الموقع لحساب المسافة."},{enableHighAccuracy:true,timeout:10000,maximumAge:15000});
+}
+
+function parseLatLng(lat,lng){
+  if(lat==null||lng==null||lat===""||lng==="")return null;
+  return {lat:Number(lat),lon:Number(lng)};
+}
+function haversine(a,b){
+  const R=6371,rad=x=>x*Math.PI/180;
+  const dLat=rad(b.lat-a.lat),dLon=rad(b.lon-a.lon);
+  const q=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(q));
+}
+
+function openNavigation(t){
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const origin=pos.coords.latitude+","+pos.coords.longitude;
+    const dest=(t.pickupLat!=null&&t.pickupLng!=null)?t.pickupLat+","+t.pickupLng:encodeURIComponent(t.pickupAddress||"");
+    location.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${dest}&travelmode=driving`;
+  },()=>{
+    location.href=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(t.pickupAddress||"")}&travelmode=driving`;
+  },{enableHighAccuracy:true,timeout:10000});
+}
+
+function tripDetails(id){
+  const t=state.data.availableTrips[id]; if(!t)return;
+  const shift=activeShift();
+  modal(`<h3 class="text-2xl font-black">تفاصيل الرحلة</h3>
+    <div class="mt-4 grid gap-3">
+      <div class="card p-4"><span class="small">التاريخ والوقت</span><div class="font-black mt-1">${dateTime(t.tripAt)}</div></div>
+      <div class="card p-4"><span class="small">قيمة الرحلة</span><div class="font-black text-xl mt-1">${money(t.amount)}</div></div>
+      <div class="card p-4"><span class="small">العميل</span><div class="font-black mt-1">${esc(t.customerName||"")}</div><div class="small mt-1">${esc(t.customerPhone||"")}</div></div>
+      <div class="card p-4"><span class="small">موقع الإقلاع</span><div class="mt-1">${esc(t.pickupAddress||"")}</div>
+        <button id="navPickup" class="btn btn-blue mt-3 w-full">📍 فتح الإقلاع في Google Maps</button></div>
+      <div class="card p-4"><span class="small">موقع النزول</span><div class="mt-1">${esc(t.dropoffAddress||"")}</div>
+        <button id="navDrop" class="btn btn-gray mt-3 w-full">🏁 فتح النزول في Google Maps</button></div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 mt-5">
+      <button id="claimBtn" class="btn btn-green" ${shift?"":"disabled"}>استلام الرحلة</button>
+      <button id="closeBtn" class="btn btn-gray">إغلاق</button>
+    </div>
+    ${shift?"":"<p class='small text-red-600 mt-2'>يجب فتح وردية أولًا.</p>"}`);
+  $("closeBtn").onclick=closeModal;
+  $("navPickup").onclick=()=>openNavigation(t);
+  $("navDrop").onclick=()=>navigator.geolocation.getCurrentPosition(p=>{
+    location.href=`https://www.google.com/maps/dir/?api=1&origin=${p.coords.latitude},${p.coords.longitude}&destination=${encodeURIComponent(t.dropoffAddress||"")}&travelmode=driving`;
+  },()=>location.href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropoffAddress||"")}`);
+  if(shift)$("claimBtn").onclick=()=>claimTrip(t.id);
+}
+
+async function claimTrip(id){
+  const shift=activeShift();
+  if(!shift)return toast("افتح وردية أولًا",true);
+  const tripRef=ref(db,"availableTrips/"+id);
+  const result=await runTransaction(tripRef,current=>{
+    if(!current || current.status!=="متاحة")return;
+    return {...current,status:"محجوزة",driverId:state.driver.id,driverName:state.driver.name,shiftId:shift.id,shiftNo:shift.shiftNo||shift.id,bookedAt:now(),updatedAt:now()};
+  });
+  if(!result.committed)return toast("الرحلة تم استلامها بواسطة سائق آخر",true);
+
+  const trip=result.snapshot.val();
+  const tripId=trip.id||id;
+  await set(ref(db,"trips/"+tripId),{
+    ...trip,id:tripId,status:"محجوزة",driverId:state.driver.id,driverName:state.driver.name,
+    shiftId:shift.id,createdAt:trip.createdAt||now(),bookedAt:trip.bookedAt||now()
+  });
+  await update(ref(db,"shifts/"+shift.id+"/tripIds"),{[tripId]:true});
+  closeModal();toast("تم استلام الرحلة وربطها بالوردية");state.view="shift";render();
+}
+
+function renderShift(){
+  const s=activeShift();
+  if(!s){
+    $("view").innerHTML=`<div class="mb-4"><h2 class="text-2xl font-black">ورديتي</h2><p class="small mt-1">افتح وردية واحدة ثم استلم رحلاتك منها.</p></div>
+    <div class="card p-6 text-center"><div class="text-5xl">🚦</div><h3 class="font-black text-xl mt-3">لا توجد وردية مفتوحة</h3>
+    <button id="openShift" class="btn btn-primary mt-5">+ فتح وردية جديدة</button></div>`;
+    $("openShift").onclick=shiftForm; return;
+  }
+  const trips=vals(state.data.trips).filter(t=>t.shiftId===s.id||t.driverId===state.driver.id&&t.shiftId===s.id);
+  const expenses=vals(state.data.expenses).filter(e=>e.shiftId===s.id);
+  const revenue=trips.reduce((a,t)=>a+Number(t.amount||0),0);
+  const exp=expenses.reduce((a,e)=>a+Number(e.amount||0),0);
+  const pct=Number(state.driver.percent??state.driver.nisba??state.driver.percentage??0);
+  const driverPct=revenue*pct/100;
+  const net=revenue-exp-driverPct;
+  $("view").innerHTML=`<div class="mb-4"><h2 class="text-2xl font-black">ورديتي</h2><p class="small mt-1">وردية رقم ${esc(s.shiftNo||s.id)}</p></div>
+  <div class="card p-4 mb-4"><div class="flex justify-between"><div><b>${esc(s.carName||s.carId||"السيارة")}</b><div class="small mt-1">بدأت: ${dateTime(s.startedAt)}</div></div><span class="badge open">مفتوحة</span></div>
+  <div class="grid grid-cols-2 gap-3 mt-4">
+    <div><span class="small">الإيرادات</span><div class="font-black text-lg">${money(revenue)}</div></div>
+    <div><span class="small">المصاريف</span><div class="font-black text-lg">${money(exp)}</div></div>
+    <div><span class="small">نسبة السائق</span><div class="font-black text-lg">${money(driverPct)}</div></div>
+    <div><span class="small">الصافي</span><div class="font-black text-lg">${money(net)}</div></div>
+  </div></div>
+  <div class="grid grid-cols-2 gap-2 mb-4">
+    <button id="addExpense" class="btn btn-gray">+ مصروف</button>
+    <button id="endShift" class="btn btn-red">إنهاء الوردية</button>
+  </div>
+  <div class="space-y-3">${trips.map(t=>`<div class="card p-4"><div class="flex justify-between"><b>${esc(t.customerName||"رحلة")}</b><b>${money(t.amount)}</b></div><div class="small mt-1">${dateTime(t.tripAt)} • ${esc(t.pickupAddress||"")} → ${esc(t.dropoffAddress||"")}</div></div>`).join("")||"<div class='card p-5 text-center text-gray-500'>لم تُسجل رحلات بعد.</div>"}</div>`;
+  $("addExpense").onclick=expenseForm;
+  $("endShift").onclick=()=>endShiftForm(s,revenue,exp,driverPct,net,trips);
+}
+
+function shiftForm(){
+  const cars=vals(state.data.cars);
+  modal(`<h3 class="text-xl font-black">🚦 فتح وردية جديدة</h3>
+    <p class="small mt-1">السائق: ${esc(state.driver.name)}</p>
+    <label class="label mt-5">اختيار السيارة</label>
+    <select id="shiftCar" class="field"><option value="">اختر السيارة</option>${cars.map(c=>`<option value="${esc(c.id)}">${esc(c.name||[c.brand,c.model,c.year].filter(Boolean).join(" "))}</option>`).join("")}</select>
+    <button id="saveShift" class="btn btn-primary w-full mt-5">فتح الوردية</button>
+    <button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
+  $("saveShift").onclick=async()=>{
+    const carId=val("shiftCar");if(!carId)return toast("اختر السيارة",true);
+    if(activeShift())return toast("لديك وردية مفتوحة بالفعل",true);
+    const id=push(ref(db,"shifts")).key;
+    const shiftNo="W-"+new Date().getFullYear()+"-"+String(Date.now()).slice(-6);
+    const car=state.data.cars[carId]||{};
+    await set(ref(db,"shifts/"+id),{id,shiftNo,driverId:state.driver.id,driverName:state.driver.name,carId,carName:car.name||[car.brand,car.model,car.year].filter(Boolean).join(" "),status:"مفتوحة",startedAt:now(),tripIds:{}});
+    closeModal();toast("تم فتح الوردية");render();
+  };
+}
+
+function expenseForm(){
+  modal(`<h3 class="text-xl font-black">💸 تسجيل مصروف</h3>
+    <label class="label mt-4">نوع المصروف</label>
+    <select id="exType" class="field">
+      <option>بنزين</option><option>مصروف شخصي للسائق</option><option>صيانة</option><option>غيار زيت</option><option>دفع مبلغ للمالك</option><option>أخرى</option>
+    </select>
+    <label class="label mt-4">المبلغ</label><input id="exAmount" class="field" type="number" step="0.01">
+    <label class="label mt-4">ملاحظات</label><input id="exNote" class="field">
+    <div id="fuelBox" class="mt-4"></div>
+    <button id="saveExpense" class="btn btn-primary w-full mt-5">حفظ المصروف</button>`);
+  $("exType").onchange=()=>{
+    $("fuelBox").innerHTML=$("exType").value==="بنزين"?`<label class="label">صورة عداد/إيصال البنزين</label>
+      <input id="fuelPhoto" class="field" type="file" accept="image/*" capture="environment">
+      <p class="small mt-1">سيتم فتح الكاميرا على الأجهزة التي تدعم capture.</p>`:"";
+  };
+  $("exType").dispatchEvent(new Event("change"));
+  $("saveExpense").onclick=async()=>{
+    const s=activeShift(),amount=num("exAmount"),type=val("exType");
+    if(!s||amount<=0)return toast("راجع الوردية والمبلغ",true);
+    const id=push(ref(db,"expenses")).key;
+    // Store the record first. Image upload can be added to Firebase Storage when Storage rules are enabled.
+    await set(ref(db,"expenses/"+id),{id,shiftId:s.id,driverId:state.driver.id,type,amount,note:val("exNote"),createdAt:now(),personal:type==="مصروف شخصي للسائق"});
+    closeModal();toast("تم تسجيل المصروف");render();
+  };
+}
+
+function endShiftForm(s,revenue,exp,driverPct,net,trips){
+  modal(`<h3 class="text-xl font-black">🔒 إنهاء الوردية</h3>
+    <div class="grid grid-cols-2 gap-3 mt-4">
+      <div class="card p-3"><span class="small">إجمالي الإيرادات</span><b class="block mt-1">${money(revenue)}</b></div>
+      <div class="card p-3"><span class="small">إجمالي المصاريف</span><b class="block mt-1">${money(exp)}</b></div>
+      <div class="card p-3"><span class="small">إجمالي نسبة السائق</span><b class="block mt-1">${money(driverPct)}</b></div>
+      <div class="card p-3"><span class="small">صافي الوردية</span><b class="block mt-1">${money(net)}</b></div>
+    </div>
+    <label class="label mt-5">المبلغ المدفوع الآن للسائق</label>
+    <input id="paidNow" class="field" type="number" step="0.01" value="0">
+    <div class="card p-4 mt-3 bg-yellow-50"><span class="small">الباقي للسائق المرحل للتراكمي</span><div id="carry" class="font-black text-xl mt-1">${money(driverPct)}</div></div>
+    <button id="confirmEnd" class="btn btn-red w-full mt-5">حفظ وإنهاء الوردية</button>`);
+  const updateCarry=()=>{$("carry").textContent=money(Math.max(0,driverPct-num("paidNow")))};
+  $("paidNow").oninput=updateCarry;updateCarry;
+  $("confirmEnd").onclick=async()=>{
+    const paid=Math.max(0,num("paidNow")),carry=Math.max(0,driverPct-paid);
+    if(paid>driverPct)return toast("المبلغ المدفوع لا يمكن أن يتجاوز نسبة السائق",true);
+    await update(ref(db,"shifts/"+s.id),{
+      status:"مغلقة",endedAt:now(),totalRevenue:revenue,totalExpenses:exp,
+      driverPercentage:driverPct,net,paidToDriver:paid,driverCarry:carry
+    });
+    // Append a compact archive record. Full trip/expense records remain in their original paths.
+    const aid=push(ref(db,"archives")).key;
+    await set(ref(db,"archives/"+aid),{id:aid,month:new Date().toISOString().slice(0,7),type:"shift",shiftId:s.id,driverId:state.driver.id,driverName:state.driver.name,totalRevenue:revenue,totalExpenses:exp,driverPercentage:driverPct,net,paidToDriver:paid,driverCarry:carry,archivedAt:now()});
+    closeModal();toast("تم إنهاء الوردية وقفلها");render();
+  };
+}
+
+function renderAccount(){
+  const d=state.driver||{};
+  const shifts=vals(state.data.shifts).filter(s=>s.driverId===d.id&&s.status==="مغلقة");
+  const revenue=shifts.reduce((a,s)=>a+Number(s.totalRevenue||0),0);
+  const pct=shifts.reduce((a,s)=>a+Number(s.driverPercentage||0),0);
+  const paid=shifts.reduce((a,s)=>a+Number(s.paidToDriver||0),0);
+  const carry=shifts.reduce((a,s)=>a+Number(s.driverCarry||0),0);
+  $("view").innerHTML=`<h2 class="text-2xl font-black mb-4">حسابي</h2>
+  <div class="card p-5">
+    <div class="text-center"><div class="w-20 h-20 rounded-full bg-yellow-100 mx-auto flex items-center justify-center text-3xl">👤</div><h3 class="font-black text-xl mt-3">${esc(d.name||"")}</h3><p class="small">${esc(d.phone||"")}</p></div>
+    <div class="grid grid-cols-2 gap-3 mt-5">
+      <div class="card p-3"><span class="small">إيراداتي</span><b class="block mt-1">${money(revenue)}</b></div>
+      <div class="card p-3"><span class="small">نسبتي</span><b class="block mt-1">${money(pct)}</b></div>
+      <div class="card p-3"><span class="small">المقبوض</span><b class="block mt-1">${money(paid)}</b></div>
+      <div class="card p-3"><span class="small">التراكمي</span><b class="block mt-1">${money(carry)}</b></div>
+    </div>
+  </div>
+  <div class="card p-5 mt-4">
+    <h3 class="font-black text-lg">🔐 كلمة السر</h3>
+    <p class="small mt-1">غيّر كلمة السر في أي وقت.</p>
+    <label class="label mt-4">كلمة السر الحالية</label><input id="oldPass" class="field" type="password">
+    <label class="label mt-3">كلمة السر الجديدة</label><input id="newPass" class="field" type="password">
+    <label class="label mt-3">تأكيد كلمة السر الجديدة</label><input id="newPass2" class="field" type="password">
+    <button id="changePass" class="btn btn-primary w-full mt-4">تغيير كلمة السر</button>
+  </div>`;
+  $("changePass").onclick=changePassword;
+}
+
+async function changePassword(){
+  const old=val("oldPass"),nw=val("newPass"),nw2=val("newPass2");
+  if(!old||!nw||!nw2)return toast("املأ الخانات كلها",true);
+  if(nw.length<4)return toast("كلمة السر يجب أن تكون 4 أحرف/أرقام على الأقل",true);
+  if(nw!==nw2)return toast("تأكيد كلمة السر غير مطابق",true);
+  const d=state.driver;
+  const oldHash=await sha256(old);
+  if(d.passwordHash && d.passwordHash!==oldHash)return toast("كلمة السر الحالية غير صحيحة",true);
+  if(!d.passwordHash && d.password && d.password!==old)return toast("كلمة السر الحالية غير صحيحة",true);
+  const newHash=await sha256(nw);
+  await update(ref(db,"drivers/"+d.id),{passwordHash:newHash,password:null,passwordChangedAt:now()});
+  state.driver={...d,passwordHash:newHash};
+  toast("تم تغيير كلمة السر بنجاح");
+  $("oldPass").value="";$("newPass").value="";$("newPass2").value="";
+}
+
+$("loginBtn").onclick=login;
+$("loginPass").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
+$("logoutBtn").onclick=()=>{localStorage.removeItem("goldenFleetDriver");state.driver=null;state.unsub.forEach(u=>u&&u());state.unsub=[];$("appScreen").classList.add("hiddenx");$("loginScreen").classList.remove("hiddenx");$("loginPass").value=""};
+document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render()});
+
+$("view").addEventListener("click",e=>{
+  const nav=e.target.closest("[data-nav]"); if(nav){const t=state.data.availableTrips[nav.dataset.nav];if(t)openNavigation(t)}
+  document.querySelectorAll("[data-trip]").forEach(()=>{});
+});
+
+setInterval(()=>{
+  if(state.view==="available"){
+    vals(state.data.availableTrips).filter(t=>t.status==="متاحة").forEach(t=>updateDistance(t.id));
+  }
+},5000);
+
+signInAnonymously(auth).then(()=>restoreLogin()).catch(e=>console.error(e));
+</script>
+</body>
+    </html>
