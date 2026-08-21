@@ -1,7 +1,6 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <link rel="manifest" href="manifest.json">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>الأسطول الذهبي - السائق</title>
@@ -131,14 +130,21 @@ async function login(){
   if(!phone||!pass)return toast("اكتب رقم السائق وكلمة السر",true);
   const snap=await get(ref(db,"drivers"));
   const drivers=snap.val()||{};
-  const found=vals(drivers).find(d=>String(d.phone||"")===phone || vals(d.phones||{}).some(x=>String(x)===phone));
+  const foundEntry=Object.entries(drivers).find(([key,d])=>
+  String(d.phone||"")===phone ||
+  vals(d.phones||{}).some(x=>String(x)===phone)
+);
+
+if(!foundEntry)return toast("رقم السائق غير موجود",true);
+
+const [driverId,found]=foundEntry;
   if(!found)return toast("رقم السائق غير موجود",true);
   const hash=await sha256(pass);
   // Supports both the new passwordHash field and a temporary legacy password field.
   if(found.passwordHash && found.passwordHash!==hash)return toast("كلمة السر غير صحيحة",true);
   if(!found.passwordHash && found.password && found.password!==pass)return toast("كلمة السر غير صحيحة",true);
-  state.driver={...found,id:found.id};
-  localStorage.setItem("goldenFleetDriver",found.id);
+  state.driver={...found,id:driverId};
+  localStorage.setItem("goldenFleetDriver",driverId);
   startListeners();
   showApp();
 }
@@ -186,107 +192,139 @@ function render(){
 
 function renderAvailable(){
   const list=vals(state.data.availableTrips).filter(t=>t.status==="متاحة").sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
+  const mine=vals(state.data.availableTrips).filter(t=>t.status==="محجوزة"&&t.driverId===state.driver.id).sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
   $("view").innerHTML=`
-    <div class="mb-4">
-      <h2 class="text-2xl font-black">الرحلات المتاحة</h2>
-      <p class="small mt-1">استلم الرحلة المناسبة لك. بعد الاستلام تصبح محجوزة لك فورًا.</p>
+    <div class="mb-4 flex items-start justify-between gap-3">
+      <div><h2 class="text-2xl font-black">الرحلات المتاحة</h2><p class="small mt-1">استلم رحلة أو أضف رحلة معك للعرض على باقي السائقين.</p></div>
+      <button id="addDriverTrip" class="btn btn-primary whitespace-nowrap">➕ رحلة جديدة</button>
     </div>
-    ${!activeShift()?`<div class="card p-4 mb-4 border border-amber-200 bg-amber-50">
-      <b>⚠️ لا توجد وردية مفتوحة</b><p class="small mt-1">افتح ورديتك أولًا من تبويب «ورديتي» حتى تستطيع استلام رحلة.</p>
-      <button class="btn btn-primary mt-3" data-go="shift">فتح وردية</button>
-    </div>`:""}
-    <div class="grid gap-4">${list.map(t=>tripCard(t)).join("")||`<div class="card p-6 text-center text-gray-500">لا توجد رحلات متاحة الآن.</div>`}</div>`;
+    ${!activeShift()?`<div class="card p-4 mb-4 border border-amber-200 bg-amber-50"><b>⚠️ لا توجد وردية مفتوحة</b><p class="small mt-1">افتح ورديتك أولًا حتى تستطيع استلام رحلة.</p><button class="btn btn-primary mt-3" data-go="shift">فتح وردية</button></div>`:""}
+    <div class="grid gap-4">${list.map(t=>tripCard(t,false)).join("")||`<div class="card p-6 text-center text-gray-500">لا توجد رحلات متاحة الآن.</div>`}</div>
+    ${mine.length?`<h3 class="font-black text-lg mt-7 mb-3">🚕 رحلاتي المحجوزة</h3><div class="grid gap-4">${mine.map(t=>tripCard(t,true)).join("")}</div>`:""}`;
+  $("addDriverTrip").onclick=()=>driverTripForm();
   $("view").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{state.view=b.dataset.go;render()});
   $("view").querySelectorAll("[data-trip]").forEach(b=>b.onclick=()=>tripDetails(b.dataset.trip));
+  $("view").querySelectorAll("[data-nav]").forEach(b=>b.onclick=()=>openNavigation(state.data.availableTrips[b.dataset.nav]));
+  list.forEach(t=>updateDistance(t.id));
 }
 
-function tripCard(t){
+function tripCard(t,mine=false){
   const d=distanceText(t);
   return `<div class="card p-4">
-    <div class="flex items-start justify-between gap-3">
-      <div><div class="font-black text-lg">${esc(t.customerName||"عميل")}</div><div class="small">${dateTime(t.tripAt)}</div></div>
-      <div class="text-left"><div class="font-black text-lg">${money(t.amount)}</div><span class="badge available">متاحة</span></div>
-    </div>
-    <div class="mt-4 space-y-2 text-sm">
-      <div>📍 <b>الإقلاع:</b> ${esc(t.pickupAddress||"")}</div>
-      <div>🏁 <b>النزول:</b> ${esc(t.dropoffAddress||"")}</div>
-      <div id="dist_${esc(t.id)}" class="small">${d}</div>
-    </div>
-    <div class="grid grid-cols-2 gap-2 mt-4">
-      <button class="btn btn-blue" data-trip="${esc(t.id)}">تفاصيل</button>
-      <button class="btn btn-green" data-nav="${esc(t.id)}">📍 فتح الملاحة</button>
-    </div>
+    <div class="flex items-start justify-between gap-3"><div><div class="font-black text-lg">${esc(t.customerName||"عميل")}</div><div class="small">${dateTime(t.tripAt)}</div></div><div class="text-left"><div class="font-black text-lg">${money(t.amount)}</div><span class="badge ${mine?"booked":"available"}">${mine?"محجوزة لي":"متاحة"}</span></div></div>
+    <div class="mt-4 space-y-2 text-sm"><div>📍 <b>الإقلاع:</b> ${esc(t.pickupAddress||"")}</div><div>🏁 <b>النزول:</b> ${esc(t.dropoffAddress||"")}</div><div id="dist_${esc(t.id)}" class="small">${d}</div></div>
+    <div class="grid grid-cols-2 gap-2 mt-4"><button class="btn btn-blue" data-trip="${esc(t.id)}">تفاصيل</button><button class="btn btn-green" data-nav="${esc(t.id)}">📍 فتح الملاحة</button></div>
   </div>`;
 }
 
 function distanceText(t){
-  if(!navigator.geolocation)return "فعّل الموقع في الهاتف لحساب موقعك الحالي.";
-  return "جاري تحديد موقعك الحالي…";
+  if(!navigator.geolocation)return "فعّل الموقع في الهاتف لحساب المسافة.";
+  return "جاري حساب الطريق...";
 }
 
 async function updateDistance(id){
-  const t=state.data.availableTrips[id];
-  if(!t||!navigator.geolocation)return;
-  navigator.geolocation.getCurrentPosition(pos=>{
-    const o={lat:pos.coords.latitude,lon:pos.coords.longitude};
-    // Browser-only fallback: straight-line distance is NOT presented as driving distance.
-    const dest=parseLatLng(t.pickupLat,t.pickupLng);
-    const el=$("dist_"+id);
-    if(!el)return;
-    if(dest){
-      const km=haversine(o.lat,o.lon,dest.lat,dest.lon);
-      el.textContent=`📡 المسافة المباشرة من موقعك: ${km.toFixed(1)} كم — افتح الملاحة لمعرفة الطريق والوقت الفعلي في Google Maps.`;
-    }else{
-      el.textContent="📡 تم تحديد موقعك. اضغط «فتح الملاحة» لمعرفة المسافة والوقت الفعلي للطريق في Google Maps.";
-    }
-  },()=>{const el=$("dist_"+id);if(el)el.textContent="⚠️ اسمح للتطبيق بالوصول إلى الموقع لحساب المسافة."},{enableHighAccuracy:true,timeout:10000,maximumAge:15000});
+  const t=state.data.availableTrips[id],el=$("dist_"+id);
+  if(!t||!el||!navigator.geolocation)return;
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    try{
+      const route=await getRoadRoute(pos.coords.latitude,pos.coords.longitude,t);
+      if(route) el.textContent=`🚗 ${route.km.toFixed(1)} كم • ⏱️ ${route.min} دقيقة تقريبًا`;
+      else el.textContent="📍 اضغط تفاصيل لمعرفة الطريق من موقعك الحالي.";
+    }catch(e){el.textContent="📍 اضغط الملاحة لحساب الطريق والوقت الفعليين."}
+  },()=>{el.textContent="⚠️ اسمح للتطبيق بالموقع لحساب المسافة."},{enableHighAccuracy:true,timeout:10000,maximumAge:10000});
 }
 
 function parseLatLng(lat,lng){
   if(lat==null||lng==null||lat===""||lng==="")return null;
-  return {lat:Number(lat),lon:Number(lng)};
+  const a=Number(lat),b=Number(lng); return Number.isFinite(a)&&Number.isFinite(b)?{lat:a,lon:b}:null;
 }
-function haversine(a,b){
-  const R=6371,rad=x=>x*Math.PI/180;
-  const dLat=rad(b.lat-a.lat),dLon=rad(b.lon-a.lon);
-  const q=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
-  return 2*R*Math.asin(Math.sqrt(q));
+
+async function geocodeAddress(address){
+  if(!address)return null;
+  const u=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=eg&q=${encodeURIComponent(address)}`;
+  const r=await fetch(u,{headers:{"Accept":"application/json"}}); if(!r.ok)return null;
+  const j=await r.json(); if(!j[0])return null;
+  return {lat:Number(j[0].lat),lon:Number(j[0].lon)};
+}
+
+async function getRoadRoute(olat,olng,t){
+  let dest=parseLatLng(t.pickupLat,t.pickupLng);
+  if(!dest) dest=await geocodeAddress(t.pickupAddress);
+  if(!dest)return null;
+  const u=`https://router.project-osrm.org/route/v1/driving/${olng},${olat};${dest.lon},${dest.lat}?overview=false`;
+  const r=await fetch(u); if(!r.ok)return null; const j=await r.json();
+  if(j.code!=="Ok"||!j.routes?.[0])return null;
+  return {km:j.routes[0].distance/1000,min:Math.max(1,Math.round(j.routes[0].duration/60)),dest};
 }
 
 function openNavigation(t){
   navigator.geolocation.getCurrentPosition(pos=>{
-    const origin=pos.coords.latitude+","+pos.coords.longitude;
-    const dest=(t.pickupLat!=null&&t.pickupLng!=null)?t.pickupLat+","+t.pickupLng:encodeURIComponent(t.pickupAddress||"");
-    location.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${dest}&travelmode=driving`;
-  },()=>{
-    location.href=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(t.pickupAddress||"")}&travelmode=driving`;
-  },{enableHighAccuracy:true,timeout:10000});
+    const origin=`${pos.coords.latitude},${pos.coords.longitude}`;
+    const destination=t.pickupLat!=null&&t.pickupLng!=null?`${t.pickupLat},${t.pickupLng}`:encodeURIComponent(t.pickupAddress||"");
+    location.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destination}&travelmode=driving`;
+  },()=>location.href=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(t.pickupAddress||"")}&travelmode=driving`,{enableHighAccuracy:true,timeout:10000});
+}
+
+function driverTripForm(editId=null){
+  const t=editId?(state.data.availableTrips[editId]||{}):{};
+  modal(`<h3 class="text-xl font-black">${editId?"✏️ تعديل الرحلة":"➕ إضافة رحلة جديدة"}</h3>
+    <div class="grid gap-3 mt-4">
+      <div class="grid grid-cols-2 gap-2"><div><label class="label">تاريخ الرحلة</label><input id="dtDate" class="field" type="date" value="${t.tripAt?new Date(t.tripAt).toISOString().slice(0,10):new Date().toISOString().slice(0,10)}"></div><div><label class="label">وقت الرحلة</label><input id="dtTime" class="field" type="time" value="${t.tripAt?new Date(t.tripAt).toTimeString().slice(0,5):""}"></div></div>
+      <div><label class="label">قيمة الرحلة</label><input id="dtAmount" class="field" type="number" step="0.01" value="${esc(t.amount||"")}"></div>
+      <div><label class="label">اسم العميل</label><input id="dtCustomer" class="field" value="${esc(t.customerName||"")}"></div>
+      <div><label class="label">رقم الهاتف</label><input id="dtPhone" class="field" inputmode="tel" value="${esc(t.customerPhone||"")}"></div>
+      <div><label class="label">موقع الإقلاع</label><input id="dtPickup" class="field" value="${esc(t.pickupAddress||"")}" placeholder="العنوان أو المكان"></div>
+      <div><label class="label">موقع النزول</label><input id="dtDropoff" class="field" value="${esc(t.dropoffAddress||"")}" placeholder="العنوان أو المكان"></div>
+    </div><button id="saveDriverTrip" class="btn btn-primary w-full mt-5">${editId?"حفظ التعديل":"حفظ الرحلة"}</button><button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
+  $("saveDriverTrip").onclick=async()=>{
+    const d=val("dtDate"),tm=val("dtTime"),amount=num("dtAmount");
+    if(!d||!tm||amount<=0||!val("dtCustomer")||!val("dtPickup")||!val("dtDropoff"))return toast("أكمل بيانات الرحلة",true);
+    const patch={tripAt:new Date(d+"T"+tm).getTime(),amount,customerName:val("dtCustomer"),customerPhone:val("dtPhone"),pickupAddress:val("dtPickup"),dropoffAddress:val("dtDropoff"),updatedAt:now()};
+    try{
+      if(editId){
+        const cur=state.data.availableTrips[editId]; if(!cur||cur.driverId!==state.driver.id||cur.status!=="محجوزة")return toast("لا يمكنك تعديل هذه الرحلة",true);
+        await update(ref(db,"availableTrips/"+editId),patch); await update(ref(db,"trips/"+editId),patch); closeModal(); toast("تم تعديل الرحلة");
+      }else{
+        const id=push(ref(db,"availableTrips")).key; await set(ref(db,"availableTrips/"+id),{id,...patch,status:"متاحة",createdAt:now(),createdBy:"driver",createdByDriverId:state.driver.id,createdByDriverName:state.driver.name}); closeModal(); toast("تمت إضافة الرحلة إلى الرحلات المتاحة");
+      }
+    }catch(e){toast("تعذر حفظ الرحلة: "+(e.message||"تحقق من صلاحيات Firebase"),true)}
+  };
+}
+
+async function returnTripToAvailable(id){
+  const t=state.data.availableTrips[id]; if(!t||t.driverId!==state.driver.id||t.status!=="محجوزة")return toast("لا يمكنك إرجاع هذه الرحلة",true);
+  if(!confirm("إلغاء استلام الرحلة وإعادتها للرحلات المتاحة؟"))return;
+  try{
+    const r=await runTransaction(ref(db,"availableTrips/"+id),cur=>{if(!cur||cur.status!=="محجوزة"||cur.driverId!==state.driver.id)return;return {...cur,status:"متاحة",driverId:null,driverName:null,shiftId:null,shiftNo:null,bookedAt:null,updatedAt:now()}});
+    if(!r.committed)return toast("لم يتم الإلغاء؛ ربما تغيرت الرحلة",true);
+    await update(ref(db,"trips/"+id),{status:"متاحة",driverId:null,driverName:null,shiftId:null,shiftNo:null,returnedToAvailableAt:now()});
+    const sh=activeShift(); if(sh)await update(ref(db,"shifts/"+sh.id+"/tripIds/"+id),null);
+    closeModal();toast("تم إرجاع الرحلة إلى الرحلات المتاحة");render();
+  }catch(e){toast("تعذر إرجاع الرحلة: "+(e.message||"تحقق من Firebase"),true)}
 }
 
 function tripDetails(id){
-  const t=state.data.availableTrips[id]; if(!t)return;
-  const shift=activeShift();
-  modal(`<h3 class="text-2xl font-black">تفاصيل الرحلة</h3>
-    <div class="mt-4 grid gap-3">
-      <div class="card p-4"><span class="small">التاريخ والوقت</span><div class="font-black mt-1">${dateTime(t.tripAt)}</div></div>
-      <div class="card p-4"><span class="small">قيمة الرحلة</span><div class="font-black text-xl mt-1">${money(t.amount)}</div></div>
-      <div class="card p-4"><span class="small">العميل</span><div class="font-black mt-1">${esc(t.customerName||"")}</div><div class="small mt-1">${esc(t.customerPhone||"")}</div></div>
-      <div class="card p-4"><span class="small">موقع الإقلاع</span><div class="mt-1">${esc(t.pickupAddress||"")}</div>
-        <button id="navPickup" class="btn btn-blue mt-3 w-full">📍 فتح الإقلاع في Google Maps</button></div>
-      <div class="card p-4"><span class="small">موقع النزول</span><div class="mt-1">${esc(t.dropoffAddress||"")}</div>
-        <button id="navDrop" class="btn btn-gray mt-3 w-full">🏁 فتح النزول في Google Maps</button></div>
-    </div>
-    <div class="grid grid-cols-2 gap-2 mt-5">
-      <button id="claimBtn" class="btn btn-green" ${shift?"":"disabled"}>استلام الرحلة</button>
-      <button id="closeBtn" class="btn btn-gray">إغلاق</button>
-    </div>
-    ${shift?"":"<p class='small text-red-600 mt-2'>يجب فتح وردية أولًا.</p>"}`);
-  $("closeBtn").onclick=closeModal;
-  $("navPickup").onclick=()=>openNavigation(t);
-  $("navDrop").onclick=()=>navigator.geolocation.getCurrentPosition(p=>{
-    location.href=`https://www.google.com/maps/dir/?api=1&origin=${p.coords.latitude},${p.coords.longitude}&destination=${encodeURIComponent(t.dropoffAddress||"")}&travelmode=driving`;
-  },()=>location.href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropoffAddress||"")}`);
-  if(shift)$("claimBtn").onclick=()=>claimTrip(t.id);
+  const t=state.data.availableTrips[id]; if(!t)return; const shift=activeShift(); const mine=t.status==="محجوزة"&&t.driverId===state.driver.id;
+  modal(`<h3 class="text-2xl font-black">تفاصيل الرحلة</h3><div class="mt-4 grid gap-3">
+    <div class="card p-4"><span class="small">التاريخ والوقت</span><div class="font-black mt-1">${dateTime(t.tripAt)}</div></div>
+    <div class="card p-4"><span class="small">قيمة الرحلة</span><div class="font-black text-xl mt-1">${money(t.amount)}</div></div>
+    <div class="card p-4"><span class="small">العميل</span><div class="font-black mt-1">${esc(t.customerName||"")}</div><div class="small mt-1">${esc(t.customerPhone||"")}</div></div>
+    <div class="card p-4"><span class="small">🚗 من موقع السائق الحالي إلى الإقلاع</span><div id="detailRoute" class="font-black text-lg mt-2">جاري تحديد الموقع وحساب الطريق...</div><div id="detailRouteNote" class="small mt-1">الحساب حسب مسار الطرق.</div></div>
+    <div class="card p-4"><span class="small">📍 موقع الإقلاع</span><div class="mt-1">${esc(t.pickupAddress||"")}</div><button id="navPickup" class="btn btn-blue mt-3 w-full">📍 فتح الإقلاع في Google Maps</button></div>
+    <div class="card p-4"><span class="small">🏁 موقع النزول</span><div class="mt-1">${esc(t.dropoffAddress||"")}</div><button id="navDrop" class="btn btn-gray mt-3 w-full">🏁 فتح النزول في Google Maps</button></div>
+  </div>
+  ${mine?`<div class="grid grid-cols-2 gap-2 mt-5"><button id="editClaimed" class="btn btn-primary">✏️ تعديل الرحلة</button><button id="returnClaimed" class="btn btn-red">↩️ إلغاء الاستلام</button></div>`:`<div class="grid grid-cols-2 gap-2 mt-5"><button id="claimBtn" class="btn btn-green" ${shift?"":"disabled"}>استلام الرحلة</button><button id="closeBtn" class="btn btn-gray">إغلاق</button></div>${shift?"":"<p class='small text-red-600 mt-2'>يجب فتح وردية أولًا.</p>"}`}`);
+  $("closeBtn")?.addEventListener("click",closeModal); $("navPickup").onclick=()=>openNavigation(t); $("navDrop").onclick=()=>navigator.geolocation.getCurrentPosition(p=>location.href=`https://www.google.com/maps/dir/?api=1&origin=${p.coords.latitude},${p.coords.longitude}&destination=${encodeURIComponent(t.dropoffAddress||"")}&travelmode=driving`,()=>location.href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropoffAddress||"")}`);
+  if(mine){$("editClaimed").onclick=()=>driverTripForm(id);$("returnClaimed").onclick=()=>returnTripToAvailable(id)}else if(shift){$("claimBtn").onclick=()=>claimTrip(t.id)}
+  calculateDetailRoute(t);
+}
+
+async function calculateDetailRoute(t){
+  const el=$("detailRoute"),note=$("detailRouteNote"); if(!el)return;
+  navigator.geolocation.getCurrentPosition(async p=>{
+    try{const r=await getRoadRoute(p.coords.latitude,p.coords.longitude,t); if(r){el.textContent=`🚗 ${r.km.toFixed(1)} كم • ⏱️ ${r.min} دقيقة تقريبًا`;note.textContent="هذا وقت ومسافة الطريق على الطرق الفعلية. ولحساب الزحام الحالي بدقة افتح Google Maps."}else{el.textContent="تم تحديد موقعك، لكن تعذر تحديد عنوان الإقلاع.";note.textContent="افتح Google Maps للملاحة والوقت المباشر."}}
+    catch(e){el.textContent="تعذر حساب الطريق الآن";note.textContent="اضغط فتح الإقلاع في Google Maps لمعرفة الوقت والمسافة الفعلية."}
+  },()=>{el.textContent="⚠️ اسمح للتطبيق بالموقع";note.textContent="فعّل GPS ثم افتح تفاصيل الرحلة مرة أخرى."},{enableHighAccuracy:true,timeout:12000,maximumAge:10000});
 }
 
 async function claimTrip(id){
@@ -343,20 +381,17 @@ function renderShift(){
 
 function shiftForm(){
   const cars=vals(state.data.cars);
-  modal(`<h3 class="text-xl font-black">🚦 فتح وردية جديدة</h3>
-    <p class="small mt-1">السائق: ${esc(state.driver.name)}</p>
-    <label class="label mt-5">اختيار السيارة</label>
-    <select id="shiftCar" class="field"><option value="">اختر السيارة</option>${cars.map(c=>`<option value="${esc(c.id)}">${esc(c.name||[c.brand,c.model,c.year].filter(Boolean).join(" "))}</option>`).join("")}</select>
-    <button id="saveShift" class="btn btn-primary w-full mt-5">فتح الوردية</button>
-    <button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
-  $("saveShift").onclick=async()=>{
-    const carId=val("shiftCar");if(!carId)return toast("اختر السيارة",true);
-    if(activeShift())return toast("لديك وردية مفتوحة بالفعل",true);
-    const id=push(ref(db,"shifts")).key;
-    const shiftNo="W-"+new Date().getFullYear()+"-"+String(Date.now()).slice(-6);
-    const car=state.data.cars[carId]||{};
-    await set(ref(db,"shifts/"+id),{id,shiftNo,driverId:state.driver.id,driverName:state.driver.name,carId,carName:car.name||[car.brand,car.model,car.year].filter(Boolean).join(" "),status:"مفتوحة",startedAt:now(),tripIds:{}});
-    closeModal();toast("تم فتح الوردية");render();
+  if(!cars.length)return toast("لا توجد سيارات مسجلة في Firebase",true);
+  modal(`<h3 class="text-xl font-black">🚦 فتح وردية جديدة</h3><p class="small mt-1">السائق: ${esc(state.driver.name)}</p><label class="label mt-5">اختيار السيارة</label><select id="shiftCar" class="field"><option value="">اختر السيارة</option>${cars.map(c=>`<option value="${esc(c.id)}">${esc(c.name||[c.brand,c.model,c.year].filter(Boolean).join(" ")||c.id)}</option>`).join("")}</select><button id="saveShift" class="btn btn-primary w-full mt-5">فتح الوردية</button><button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
+  const btn=$("saveShift");
+  btn.onclick=async()=>{
+    const carId=val("shiftCar"); if(!carId)return toast("اختر السيارة",true); if(activeShift())return toast("لديك وردية مفتوحة بالفعل",true);
+    btn.disabled=true;btn.textContent="جاري فتح الوردية...";
+    try{
+      const id=push(ref(db,"shifts")).key,shiftNo="W-"+new Date().getFullYear()+"-"+String(Date.now()).slice(-6),car=state.data.cars[carId]||{};
+      await set(ref(db,"shifts/"+id),{id,shiftNo,driverId:state.driver.id,driverName:state.driver.name,carId,carName:car.name||[car.brand,car.model,car.year].filter(Boolean).join(" ")||carId,status:"مفتوحة",startedAt:now(),tripIds:{}});
+      closeModal();toast("تم فتح الوردية");state.view="shift";render();
+    }catch(e){btn.disabled=false;btn.textContent="فتح الوردية";toast("لم تفتح الوردية: "+(e.message||"تحقق من صلاحيات Firebase"),true)}
   };
 }
 
@@ -477,4 +512,4 @@ setInterval(()=>{
 signInAnonymously(auth).then(()=>restoreLogin()).catch(e=>console.error(e));
 </script>
 </body>
-    </html>
+  </html>
