@@ -40,13 +40,18 @@
     <h1 class="text-2xl font-black mt-5">الأسطول الذهبي</h1>
     <p class="text-gray-500 mt-1">تطبيق السائق</p>
     <div class="text-right mt-6">
-      <label class="label">رقم السائق</label>
-      <input id="loginPhone" class="field" inputmode="tel" placeholder="اكتب رقم السائق">
+      <div class="flex justify-between items-center mb-1">
+        <label class="label mb-0">اختر اسم السائق</label>
+        <button id="reloadDriversBtn" type="button" class="text-xs text-amber-700 font-bold underline">🔄 تحديث الأسماء</button>
+      </div>
+      <select id="loginDriverSelect" class="field">
+        <option value="">جاري تحميل السائقين...</option>
+      </select>
       <label class="label mt-4">كلمة السر</label>
-      <input id="loginPass" class="field" type="password" placeholder="كلمة السر">
+      <input id="loginPass" class="field" type="password" value="1234" placeholder="كلمة السر">
     </div>
     <button id="loginBtn" class="btn btn-primary w-full mt-5">دخول</button>
-    <p class="small mt-4">كلمة السر خاصة بكل سائق ويمكن تغييرها من «حسابي».</p>
+    <p class="small mt-4">كلمة السر الافتراضية 1234 ويمكن تغييرها من «حسابي».</p>
   </div>
 </section>
 
@@ -76,8 +81,7 @@
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 import {getDatabase, ref, get, set, update, push, onValue, runTransaction} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
-import {getAuth, signInAnonymously, onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-
+import {getAuth, signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyC2kISqD9SEhnNujTK9nrQ0XuvLTDyYk",
@@ -88,7 +92,6 @@ const firebaseConfig = {
   messagingSenderId: "313509851153",
   appId: "1:313509851153:web:57cf94a12f32a6f57901b0"
 };
-
 
 const app=initializeApp(firebaseConfig);
 const db=getDatabase(app);
@@ -102,7 +105,6 @@ const state={
 };
 
 const $=id=>document.getElementById(id);
-const vals=o=>Object.values(o||{});
 const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
 const num=id=>Number($(id)?.value||0);
 const val=id=>$(id)?.value?.trim()||"";
@@ -117,32 +119,82 @@ function toast(msg,bad=false){
   setTimeout(()=>$("toast").classList.add("hiddenx"),2500);
 }
 function modal(x){$("modalSheet").innerHTML=x;$("modal").classList.remove("hiddenx")}
-function closeModal(){$("modal").classList.add("hiddenx");$("modalSheet").innerHTML=""}
+let fuelCameraStream=null;
+let fuelPhotoData="";
+function stopFuelCamera(){
+  if(fuelCameraStream){fuelCameraStream.getTracks().forEach(t=>t.stop());fuelCameraStream=null;}
+}
+function closeModal(){stopFuelCamera();$("modal").classList.add("hiddenx");$("modalSheet").innerHTML=""}
 window.closeModal=closeModal;
 
-function sha256(text){
+async function sha256(text){
   const data=new TextEncoder().encode(text);
   return crypto.subtle.digest("SHA-256",data).then(buf=>[...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,"0")).join(""));
 }
 
+// معالجة شاملة لجلب وتحويل كل السائقين مهما كان شكل تخزينهم في القاعدة
+async function loadDriversList(){
+  const select=$("loginDriverSelect");
+  if(!select)return;
+  select.innerHTML='<option value="">جاري تحميل السائقين...</option>';
+  try{
+    const snap=await get(ref(db,"drivers"));
+    const rawData=snap.val()||{};
+    state.data.drivers={};
+    
+    let html='<option value="">اختر اسم السائق</option>';
+    let count=0;
+
+    // فحص وتحويل البيانات سواء كانت Object مفتاح وقيمة أو مصفوفة
+    Object.keys(rawData).forEach(key=>{
+      const item=rawData[key];
+      if(item && typeof item==="object"){
+        // إذا كان العنصر يحتوي بداخله على بيانات أو أبناء
+        const driverId = item.id || key;
+        const driverName = item.name || item.fullName || item.driverName;
+        if(driverName){
+          state.data.drivers[driverId]={...item, id:driverId, name:driverName};
+          html+=`<option value="${esc(driverId)}">${esc(driverName)}</option>`;
+          count++;
+        } else {
+          // احتمال أن يكون مفتاح رئيسي تحته بيانات مباشرة
+          Object.keys(item.sub||item).forEach(subKey=>{
+            const subItem=item[subKey];
+            if(subItem && typeof subItem==="object" && (subItem.name||subItem.fullName)){
+              const subId = subItem.id || subKey;
+              const subName = subItem.name || subItem.fullName;
+              state.data.drivers[subId]={...subItem, id:subId, name:subName};
+              html+=`<option value="${esc(subId)}">${esc(subName)}</option>`;
+              count++;
+            }
+          });
+        }
+      }
+    });
+
+    if(count===0){
+      select.innerHTML='<option value="">لا توجد أسماء سائقين مسجلة (تأكد من قاعدة البيانات)</option>';
+    } else {
+      select.innerHTML=html;
+    }
+  }catch(e){
+    console.error(e);
+    select.innerHTML='<option value="">خطأ في التحميل (اضغط تحديث)</option>';
+    toast("تعذر تحميل السائقين", true);
+  }
+}
+
 async function login(){
-  const phone=val("loginPhone"), pass=val("loginPass");
-  if(!phone||!pass)return toast("اكتب رقم السائق وكلمة السر",true);
-  const snap=await get(ref(db,"drivers"));
-  const drivers=snap.val()||{};
-  const foundEntry=Object.entries(drivers).find(([key,d])=>
-  String(d.phone||"")===phone ||
-  vals(d.phones||{}).some(x=>String(x)===phone)
-);
-
-if(!foundEntry)return toast("رقم السائق غير موجود",true);
-
-const [driverId,found]=foundEntry;
-  if(!found)return toast("رقم السائق غير موجود",true);
+  const driverId=val("loginDriverSelect"), pass=val("loginPass");
+  if(!driverId||!pass)return toast("اختر اسم السائق واكتب كلمة السر",true);
+  
+  const found=state.data.drivers[driverId];
+  if(!found)return toast("السائق غير موجود، اختر من القائمة",true);
   const hash=await sha256(pass);
-  // Supports both the new passwordHash field and a temporary legacy password field.
+  
   if(found.passwordHash && found.passwordHash!==hash)return toast("كلمة السر غير صحيحة",true);
   if(!found.passwordHash && found.password && found.password!==pass)return toast("كلمة السر غير صحيحة",true);
+  
   state.driver={...found,id:driverId};
   localStorage.setItem("goldenFleetDriver",driverId);
   startListeners();
@@ -150,18 +202,27 @@ const [driverId,found]=foundEntry;
 }
 
 async function restoreLogin(){
+  await loadDriversList();
   const id=localStorage.getItem("goldenFleetDriver");
   if(!id)return;
   const s=await get(ref(db,"drivers/"+id));
-  if(s.exists()){state.driver={...s.val(),id};startListeners();showApp();}
+  if(s.exists()){
+    const valData=s.val();
+    state.driver={...(typeof valData==="object"?valData:{}),id, name:valData.name||valData.fullName||id};
+    startListeners();
+    showApp();
+  }
 }
 
 function startListeners(){
   state.unsub.forEach(u=>u&&u());
   state.unsub=[];
-  const paths=["drivers","cars","availableTrips","shifts","trips","expenses"];
+  const paths=["cars","availableTrips","shifts","trips","expenses"];
   for(const p of paths){
-    const u=onValue(ref(db,p),snap=>{state.data[p]=snap.val()||{}; if(p==="drivers"&&state.driver?.id&&state.data.drivers[state.driver.id])state.driver={...state.data.drivers[state.driver.id],id:state.driver.id}; render();});
+    const u=onValue(ref(db,p),snap=>{
+      state.data[p]=snap.val()||{};
+      render();
+    });
     state.unsub.push(u);
   }
 }
@@ -174,7 +235,7 @@ function showApp(){
 }
 
 function activeShift(){
-  return vals(state.data.shifts).find(s=>
+  return Object.values(state.data.shifts||{}).find(s=>
     s.driverId===state.driver?.id &&
     (s.status==="مفتوحة"||s.status==="مفتوحه"||s.status==="open") &&
     !s.endedAt
@@ -191,140 +252,72 @@ function render(){
 }
 
 function renderAvailable(){
-  const list=vals(state.data.availableTrips).filter(t=>t.status==="متاحة").sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
-  const mine=vals(state.data.availableTrips).filter(t=>t.status==="محجوزة"&&t.driverId===state.driver.id).sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
+  const list=Object.values(state.data.availableTrips||{}).filter(t=>t.status==="متاحة").sort((a,b)=>(a.tripAt||0)-(b.tripAt||0));
   $("view").innerHTML=`
-    <div class="mb-4 flex items-start justify-between gap-3">
-      <div><h2 class="text-2xl font-black">الرحلات المتاحة</h2><p class="small mt-1">استلم رحلة أو أضف رحلة معك للعرض على باقي السائقين.</p></div>
-      <button id="addDriverTrip" class="btn btn-primary whitespace-nowrap">➕ رحلة جديدة</button>
+    <div class="mb-4">
+      <h2 class="text-2xl font-black">الرحلات المتاحة</h2>
+      <p class="small mt-1">استلم الرحلة المناسبة لك. بعد الاستلام تصبح محجوزة لك فورًا.</p>
     </div>
-    ${!activeShift()?`<div class="card p-4 mb-4 border border-amber-200 bg-amber-50"><b>⚠️ لا توجد وردية مفتوحة</b><p class="small mt-1">افتح ورديتك أولًا حتى تستطيع استلام رحلة.</p><button class="btn btn-primary mt-3" data-go="shift">فتح وردية</button></div>`:""}
-    <div class="grid gap-4">${list.map(t=>tripCard(t,false)).join("")||`<div class="card p-6 text-center text-gray-500">لا توجد رحلات متاحة الآن.</div>`}</div>
-    ${mine.length?`<h3 class="font-black text-lg mt-7 mb-3">🚕 رحلاتي المحجوزة</h3><div class="grid gap-4">${mine.map(t=>tripCard(t,true)).join("")}</div>`:""}`;
-  $("addDriverTrip").onclick=()=>driverTripForm();
+    ${!activeShift()?`<div class="card p-4 mb-4 border border-amber-200 bg-amber-50">
+      <b>⚠️ لا توجد وردية مفتوحة</b><p class="small mt-1">افتح ورديتك أولًا من تبويب «ورديتي» حتى تستطيع استلام رحلة.</p>
+      <button class="btn btn-primary mt-3" data-go="shift">فتح وردية</button>
+    </div>`:""}
+    <div class="grid gap-4">${list.map(t=>tripCard(t)).join("")||`<div class="card p-6 text-center text-gray-500">لا توجد رحلات متاحة الآن.</div>`}</div>`;
   $("view").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{state.view=b.dataset.go;render()});
   $("view").querySelectorAll("[data-trip]").forEach(b=>b.onclick=()=>tripDetails(b.dataset.trip));
-  $("view").querySelectorAll("[data-nav]").forEach(b=>b.onclick=()=>openNavigation(state.data.availableTrips[b.dataset.nav]));
-  list.forEach(t=>updateDistance(t.id));
 }
 
-function tripCard(t,mine=false){
-  const d=distanceText(t);
+function tripCard(t){
   return `<div class="card p-4">
-    <div class="flex items-start justify-between gap-3"><div><div class="font-black text-lg">${esc(t.customerName||"عميل")}</div><div class="small">${dateTime(t.tripAt)}</div></div><div class="text-left"><div class="font-black text-lg">${money(t.amount)}</div><span class="badge ${mine?"booked":"available"}">${mine?"محجوزة لي":"متاحة"}</span></div></div>
-    <div class="mt-4 space-y-2 text-sm"><div>📍 <b>الإقلاع:</b> ${esc(t.pickupAddress||"")}</div><div>🏁 <b>النزول:</b> ${esc(t.dropoffAddress||"")}</div><div id="dist_${esc(t.id)}" class="small">${d}</div></div>
-    <div class="grid grid-cols-2 gap-2 mt-4"><button class="btn btn-blue" data-trip="${esc(t.id)}">تفاصيل</button><button class="btn btn-green" data-nav="${esc(t.id)}">📍 فتح الملاحة</button></div>
+    <div class="flex items-start justify-between gap-3">
+      <div><div class="font-black text-lg">${esc(t.customerName||"عميل")}</div><div class="small">${dateTime(t.tripAt)}</div></div>
+      <div class="text-left"><div class="font-black text-lg">${money(t.amount)}</div><span class="badge available">متاحة</span></div>
+    </div>
+    <div class="mt-4 space-y-2 text-sm">
+      <div>📍 <b>الإقلاع:</b> ${esc(t.pickupAddress||"")}</div>
+      <div>🏁 <b>النزول:</b> ${esc(t.dropoffAddress||"")}</div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 mt-4">
+      <button class="btn btn-blue" data-trip="${esc(t.id)}">تفاصيل</button>
+      <button class="btn btn-green" data-nav="${esc(t.id)}">📍 فتح الملاحة</button>
+    </div>
   </div>`;
-}
-
-function distanceText(t){
-  if(!navigator.geolocation)return "فعّل الموقع في الهاتف لحساب المسافة.";
-  return "جاري حساب الطريق...";
-}
-
-async function updateDistance(id){
-  const t=state.data.availableTrips[id],el=$("dist_"+id);
-  if(!t||!el||!navigator.geolocation)return;
-  navigator.geolocation.getCurrentPosition(async pos=>{
-    try{
-      const route=await getRoadRoute(pos.coords.latitude,pos.coords.longitude,t);
-      if(route) el.textContent=`🚗 ${route.km.toFixed(1)} كم • ⏱️ ${route.min} دقيقة تقريبًا`;
-      else el.textContent="📍 اضغط تفاصيل لمعرفة الطريق من موقعك الحالي.";
-    }catch(e){el.textContent="📍 اضغط الملاحة لحساب الطريق والوقت الفعليين."}
-  },()=>{el.textContent="⚠️ اسمح للتطبيق بالموقع لحساب المسافة."},{enableHighAccuracy:true,timeout:10000,maximumAge:10000});
-}
-
-function parseLatLng(lat,lng){
-  if(lat==null||lng==null||lat===""||lng==="")return null;
-  const a=Number(lat),b=Number(lng); return Number.isFinite(a)&&Number.isFinite(b)?{lat:a,lon:b}:null;
-}
-
-async function geocodeAddress(address){
-  if(!address)return null;
-  const u=`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=eg&q=${encodeURIComponent(address)}`;
-  const r=await fetch(u,{headers:{"Accept":"application/json"}}); if(!r.ok)return null;
-  const j=await r.json(); if(!j[0])return null;
-  return {lat:Number(j[0].lat),lon:Number(j[0].lon)};
-}
-
-async function getRoadRoute(olat,olng,t){
-  let dest=parseLatLng(t.pickupLat,t.pickupLng);
-  if(!dest) dest=await geocodeAddress(t.pickupAddress);
-  if(!dest)return null;
-  const u=`https://router.project-osrm.org/route/v1/driving/${olng},${olat};${dest.lon},${dest.lat}?overview=false`;
-  const r=await fetch(u); if(!r.ok)return null; const j=await r.json();
-  if(j.code!=="Ok"||!j.routes?.[0])return null;
-  return {km:j.routes[0].distance/1000,min:Math.max(1,Math.round(j.routes[0].duration/60)),dest};
 }
 
 function openNavigation(t){
   navigator.geolocation.getCurrentPosition(pos=>{
-    const origin=`${pos.coords.latitude},${pos.coords.longitude}`;
-    const destination=t.pickupLat!=null&&t.pickupLng!=null?`${t.pickupLat},${t.pickupLng}`:encodeURIComponent(t.pickupAddress||"");
-    location.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${destination}&travelmode=driving`;
-  },()=>location.href=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(t.pickupAddress||"")}&travelmode=driving`,{enableHighAccuracy:true,timeout:10000});
-}
-
-function driverTripForm(editId=null){
-  const t=editId?(state.data.availableTrips[editId]||{}):{};
-  modal(`<h3 class="text-xl font-black">${editId?"✏️ تعديل الرحلة":"➕ إضافة رحلة جديدة"}</h3>
-    <div class="grid gap-3 mt-4">
-      <div class="grid grid-cols-2 gap-2"><div><label class="label">تاريخ الرحلة</label><input id="dtDate" class="field" type="date" value="${t.tripAt?new Date(t.tripAt).toISOString().slice(0,10):new Date().toISOString().slice(0,10)}"></div><div><label class="label">وقت الرحلة</label><input id="dtTime" class="field" type="time" value="${t.tripAt?new Date(t.tripAt).toTimeString().slice(0,5):""}"></div></div>
-      <div><label class="label">قيمة الرحلة</label><input id="dtAmount" class="field" type="number" step="0.01" value="${esc(t.amount||"")}"></div>
-      <div><label class="label">اسم العميل</label><input id="dtCustomer" class="field" value="${esc(t.customerName||"")}"></div>
-      <div><label class="label">رقم الهاتف</label><input id="dtPhone" class="field" inputmode="tel" value="${esc(t.customerPhone||"")}"></div>
-      <div><label class="label">موقع الإقلاع</label><input id="dtPickup" class="field" value="${esc(t.pickupAddress||"")}" placeholder="العنوان أو المكان"></div>
-      <div><label class="label">موقع النزول</label><input id="dtDropoff" class="field" value="${esc(t.dropoffAddress||"")}" placeholder="العنوان أو المكان"></div>
-    </div><button id="saveDriverTrip" class="btn btn-primary w-full mt-5">${editId?"حفظ التعديل":"حفظ الرحلة"}</button><button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
-  $("saveDriverTrip").onclick=async()=>{
-    const d=val("dtDate"),tm=val("dtTime"),amount=num("dtAmount");
-    if(!d||!tm||amount<=0||!val("dtCustomer")||!val("dtPickup")||!val("dtDropoff"))return toast("أكمل بيانات الرحلة",true);
-    const patch={tripAt:new Date(d+"T"+tm).getTime(),amount,customerName:val("dtCustomer"),customerPhone:val("dtPhone"),pickupAddress:val("dtPickup"),dropoffAddress:val("dtDropoff"),updatedAt:now()};
-    try{
-      if(editId){
-        const cur=state.data.availableTrips[editId]; if(!cur||cur.driverId!==state.driver.id||cur.status!=="محجوزة")return toast("لا يمكنك تعديل هذه الرحلة",true);
-        await update(ref(db,"availableTrips/"+editId),patch); await update(ref(db,"trips/"+editId),patch); closeModal(); toast("تم تعديل الرحلة");
-      }else{
-        const id=push(ref(db,"availableTrips")).key; await set(ref(db,"availableTrips/"+id),{id,...patch,status:"متاحة",createdAt:now(),createdBy:"driver",createdByDriverId:state.driver.id,createdByDriverName:state.driver.name}); closeModal(); toast("تمت إضافة الرحلة إلى الرحلات المتاحة");
-      }
-    }catch(e){toast("تعذر حفظ الرحلة: "+(e.message||"تحقق من صلاحيات Firebase"),true)}
-  };
-}
-
-async function returnTripToAvailable(id){
-  const t=state.data.availableTrips[id]; if(!t||t.driverId!==state.driver.id||t.status!=="محجوزة")return toast("لا يمكنك إرجاع هذه الرحلة",true);
-  if(!confirm("إلغاء استلام الرحلة وإعادتها للرحلات المتاحة؟"))return;
-  try{
-    const r=await runTransaction(ref(db,"availableTrips/"+id),cur=>{if(!cur||cur.status!=="محجوزة"||cur.driverId!==state.driver.id)return;return {...cur,status:"متاحة",driverId:null,driverName:null,shiftId:null,shiftNo:null,bookedAt:null,updatedAt:now()}});
-    if(!r.committed)return toast("لم يتم الإلغاء؛ ربما تغيرت الرحلة",true);
-    await update(ref(db,"trips/"+id),{status:"متاحة",driverId:null,driverName:null,shiftId:null,shiftNo:null,returnedToAvailableAt:now()});
-    const sh=activeShift(); if(sh)await update(ref(db,"shifts/"+sh.id+"/tripIds/"+id),null);
-    closeModal();toast("تم إرجاع الرحلة إلى الرحلات المتاحة");render();
-  }catch(e){toast("تعذر إرجاع الرحلة: "+(e.message||"تحقق من Firebase"),true)}
+    const origin=pos.coords.latitude+","+pos.coords.longitude;
+    const dest=(t.pickupLat!=null&&t.pickupLng!=null)?t.pickupLat+","+t.pickupLng:encodeURIComponent(t.pickupAddress||"");
+    location.href=`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${dest}&travelmode=driving`;
+  },()=>{
+    location.href=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(t.pickupAddress||"")}&travelmode=driving`;
+  },{enableHighAccuracy:true,timeout:10000});
 }
 
 function tripDetails(id){
-  const t=state.data.availableTrips[id]; if(!t)return; const shift=activeShift(); const mine=t.status==="محجوزة"&&t.driverId===state.driver.id;
-  modal(`<h3 class="text-2xl font-black">تفاصيل الرحلة</h3><div class="mt-4 grid gap-3">
-    <div class="card p-4"><span class="small">التاريخ والوقت</span><div class="font-black mt-1">${dateTime(t.tripAt)}</div></div>
-    <div class="card p-4"><span class="small">قيمة الرحلة</span><div class="font-black text-xl mt-1">${money(t.amount)}</div></div>
-    <div class="card p-4"><span class="small">العميل</span><div class="font-black mt-1">${esc(t.customerName||"")}</div><div class="small mt-1">${esc(t.customerPhone||"")}</div></div>
-    <div class="card p-4"><span class="small">🚗 من موقع السائق الحالي إلى الإقلاع</span><div id="detailRoute" class="font-black text-lg mt-2">جاري تحديد الموقع وحساب الطريق...</div><div id="detailRouteNote" class="small mt-1">الحساب حسب مسار الطرق.</div></div>
-    <div class="card p-4"><span class="small">📍 موقع الإقلاع</span><div class="mt-1">${esc(t.pickupAddress||"")}</div><button id="navPickup" class="btn btn-blue mt-3 w-full">📍 فتح الإقلاع في Google Maps</button></div>
-    <div class="card p-4"><span class="small">🏁 موقع النزول</span><div class="mt-1">${esc(t.dropoffAddress||"")}</div><button id="navDrop" class="btn btn-gray mt-3 w-full">🏁 فتح النزول في Google Maps</button></div>
-  </div>
-  ${mine?`<div class="grid grid-cols-2 gap-2 mt-5"><button id="editClaimed" class="btn btn-primary">✏️ تعديل الرحلة</button><button id="returnClaimed" class="btn btn-red">↩️ إلغاء الاستلام</button></div>`:`<div class="grid grid-cols-2 gap-2 mt-5"><button id="claimBtn" class="btn btn-green" ${shift?"":"disabled"}>استلام الرحلة</button><button id="closeBtn" class="btn btn-gray">إغلاق</button></div>${shift?"":"<p class='small text-red-600 mt-2'>يجب فتح وردية أولًا.</p>"}`}`);
-  $("closeBtn")?.addEventListener("click",closeModal); $("navPickup").onclick=()=>openNavigation(t); $("navDrop").onclick=()=>navigator.geolocation.getCurrentPosition(p=>location.href=`https://www.google.com/maps/dir/?api=1&origin=${p.coords.latitude},${p.coords.longitude}&destination=${encodeURIComponent(t.dropoffAddress||"")}&travelmode=driving`,()=>location.href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropoffAddress||"")}`);
-  if(mine){$("editClaimed").onclick=()=>driverTripForm(id);$("returnClaimed").onclick=()=>returnTripToAvailable(id)}else if(shift){$("claimBtn").onclick=()=>claimTrip(t.id)}
-  calculateDetailRoute(t);
-}
-
-async function calculateDetailRoute(t){
-  const el=$("detailRoute"),note=$("detailRouteNote"); if(!el)return;
-  navigator.geolocation.getCurrentPosition(async p=>{
-    try{const r=await getRoadRoute(p.coords.latitude,p.coords.longitude,t); if(r){el.textContent=`🚗 ${r.km.toFixed(1)} كم • ⏱️ ${r.min} دقيقة تقريبًا`;note.textContent="هذا وقت ومسافة الطريق على الطرق الفعلية. ولحساب الزحام الحالي بدقة افتح Google Maps."}else{el.textContent="تم تحديد موقعك، لكن تعذر تحديد عنوان الإقلاع.";note.textContent="افتح Google Maps للملاحة والوقت المباشر."}}
-    catch(e){el.textContent="تعذر حساب الطريق الآن";note.textContent="اضغط فتح الإقلاع في Google Maps لمعرفة الوقت والمسافة الفعلية."}
-  },()=>{el.textContent="⚠️ اسمح للتطبيق بالموقع";note.textContent="فعّل GPS ثم افتح تفاصيل الرحلة مرة أخرى."},{enableHighAccuracy:true,timeout:12000,maximumAge:10000});
+  const t=state.data.availableTrips[id]; if(!t)return;
+  const shift=activeShift();
+  modal(`<h3 class="text-2xl font-black">تفاصيل الرحلة</h3>
+    <div class="mt-4 grid gap-3">
+      <div class="card p-4"><span class="small">التاريخ والوقت</span><div class="font-black mt-1">${dateTime(t.tripAt)}</div></div>
+      <div class="card p-4"><span class="small">قيمة الرحلة</span><div class="font-black text-xl mt-1">${money(t.amount)}</div></div>
+      <div class="card p-4"><span class="small">العميل</span><div class="font-black mt-1">${esc(t.customerName||"")}</div><div class="small mt-1">${esc(t.customerPhone||"")}</div></div>
+      <div class="card p-4"><span class="small">موقع الإقلاع</span><div class="mt-1">${esc(t.pickupAddress||"")}</div>
+        <button id="navPickup" class="btn btn-blue mt-3 w-full">📍 فتح الإقلاع في Google Maps</button></div>
+      <div class="card p-4"><span class="small">موقع النزول</span><div class="mt-1">${esc(t.dropoffAddress||"")}</div>
+        <button id="navDrop" class="btn btn-gray mt-3 w-full">🏁 فتح النزول في Google Maps</button></div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 mt-5">
+      <button id="claimBtn" class="btn btn-green" ${shift?"":"disabled"}>استلام الرحلة</button>
+      <button id="closeBtn" class="btn btn-gray">إغلاق</button>
+    </div>
+    ${shift?"":"<p class='small text-red-600 mt-2'>يجب فتح وردية أولًا.</p>"}`);
+  $("closeBtn").onclick=closeModal;
+  $("navPickup").onclick=()=>openNavigation(t);
+  $("navDrop").onclick=()=>navigator.geolocation.getCurrentPosition(p=>{
+    location.href=`https://www.google.com/maps/dir/?api=1&origin=${p.coords.latitude},${p.coords.longitude}&destination=${encodeURIComponent(t.dropoffAddress||"")}&travelmode=driving`;
+  },()=>location.href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropoffAddress||"")}`);
+  if(shift)$("claimBtn").onclick=()=>claimTrip(t.id);
 }
 
 async function claimTrip(id){
@@ -352,11 +345,11 @@ function renderShift(){
   if(!s){
     $("view").innerHTML=`<div class="mb-4"><h2 class="text-2xl font-black">ورديتي</h2><p class="small mt-1">افتح وردية واحدة ثم استلم رحلاتك منها.</p></div>
     <div class="card p-6 text-center"><div class="text-5xl">🚦</div><h3 class="font-black text-xl mt-3">لا توجد وردية مفتوحة</h3>
-    <button id="openShift" class="btn btn-primary mt-5">+ فتح وردية جديدة</button></div>`;
-    $("openShift").onclick=shiftForm; return;
+    <button id="openShiftBtn" class="btn btn-primary mt-5">+ فتح وردية جديدة</button></div>`;
+    $("openShiftBtn").onclick=shiftForm; return;
   }
-  const trips=vals(state.data.trips).filter(t=>t.shiftId===s.id||t.driverId===state.driver.id&&t.shiftId===s.id);
-  const expenses=vals(state.data.expenses).filter(e=>e.shiftId===s.id);
+  const trips=Object.values(state.data.trips||{}).filter(t=>t.shiftId===s.id||t.driverId===state.driver.id&&t.shiftId===s.id);
+  const expenses=Object.values(state.data.expenses||{}).filter(e=>e.shiftId===s.id);
   const revenue=trips.reduce((a,t)=>a+Number(t.amount||0),0);
   const exp=expenses.reduce((a,e)=>a+Number(e.amount||0),0);
   const pct=Number(state.driver.percent??state.driver.nisba??state.driver.percentage??0);
@@ -380,22 +373,26 @@ function renderShift(){
 }
 
 function shiftForm(){
-  const cars=vals(state.data.cars);
-  if(!cars.length)return toast("لا توجد سيارات مسجلة في Firebase",true);
-  modal(`<h3 class="text-xl font-black">🚦 فتح وردية جديدة</h3><p class="small mt-1">السائق: ${esc(state.driver.name)}</p><label class="label mt-5">اختيار السيارة</label><select id="shiftCar" class="field"><option value="">اختر السيارة</option>${cars.map(c=>`<option value="${esc(c.id)}">${esc(c.name||[c.brand,c.model,c.year].filter(Boolean).join(" ")||c.id)}</option>`).join("")}</select><button id="saveShift" class="btn btn-primary w-full mt-5">فتح الوردية</button><button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
-  const btn=$("saveShift");
-  btn.onclick=async()=>{
-    const carId=val("shiftCar"); if(!carId)return toast("اختر السيارة",true); if(activeShift())return toast("لديك وردية مفتوحة بالفعل",true);
-    btn.disabled=true;btn.textContent="جاري فتح الوردية...";
-    try{
-      const id=push(ref(db,"shifts")).key,shiftNo="W-"+new Date().getFullYear()+"-"+String(Date.now()).slice(-6),car=state.data.cars[carId]||{};
-      await set(ref(db,"shifts/"+id),{id,shiftNo,driverId:state.driver.id,driverName:state.driver.name,carId,carName:car.name||[car.brand,car.model,car.year].filter(Boolean).join(" ")||carId,status:"مفتوحة",startedAt:now(),tripIds:{}});
-      closeModal();toast("تم فتح الوردية");state.view="shift";render();
-    }catch(e){btn.disabled=false;btn.textContent="فتح الوردية";toast("لم تفتح الوردية: "+(e.message||"تحقق من صلاحيات Firebase"),true)}
+  const cars=Object.values(state.data.cars||{});
+  modal(`<h3 class="text-xl font-black">🚦 فتح وردية جديدة</h3>
+    <p class="small mt-1">السائق: ${esc(state.driver.name)}</p>
+    <label class="label mt-5">اختيار السيارة</label>
+    <select id="shiftCar" class="field"><option value="">اختر السيارة</option>${cars.map(c=>`<option value="${esc(c.id)}">${esc(c.name||[c.brand,c.model,c.year].filter(Boolean).join(" "))}</option>`).join("")}</select>
+    <button id="saveShift" class="btn btn-primary w-full mt-5">فتح الوردية</button>
+    <button class="btn btn-gray w-full mt-2" onclick="closeModal()">إلغاء</button>`);
+  $("saveShift").onclick=async()=>{
+    const carId=val("shiftCar");if(!carId)return toast("اختر السيارة",true);
+    if(activeShift())return toast("لديك وردية مفتوحة بالفعل",true);
+    const id=push(ref(db,"shifts")).key;
+    const shiftNo="W-"+new Date().getFullYear()+"-"+String(Date.now()).slice(-6);
+    const car=state.data.cars[carId]||{};
+    await set(ref(db,"shifts/"+id),{id,shiftNo,driverId:state.driver.id,driverName:state.driver.name,carId,carName:car.name||[car.brand,car.model,car.year].filter(Boolean).join(" "),status:"مفتوحة",startedAt:now(),tripIds:{}});
+    closeModal();toast("تم فتح الوردية");render();
   };
 }
 
 function expenseForm(){
+  fuelPhotoData="";
   modal(`<h3 class="text-xl font-black">💸 تسجيل مصروف</h3>
     <label class="label mt-4">نوع المصروف</label>
     <select id="exType" class="field">
@@ -405,20 +402,94 @@ function expenseForm(){
     <label class="label mt-4">ملاحظات</label><input id="exNote" class="field">
     <div id="fuelBox" class="mt-4"></div>
     <button id="saveExpense" class="btn btn-primary w-full mt-5">حفظ المصروف</button>`);
-  $("exType").onchange=()=>{
-    $("fuelBox").innerHTML=$("exType").value==="بنزين"?`<label class="label">صورة عداد/إيصال البنزين</label>
-      <input id="fuelPhoto" class="field" type="file" accept="image/*" capture="environment">
-      <p class="small mt-1">سيتم فتح الكاميرا على الأجهزة التي تدعم capture.</p>`:"";
+
+  const typeChanged=async()=>{
+    stopFuelCamera();
+    fuelPhotoData="";
+    if($("exType").value!=="بنزين"){
+      $("fuelBox").innerHTML="";
+      return;
+    }
+    $("fuelBox").innerHTML=`
+      <div class="rounded-2xl border border-yellow-300 bg-yellow-50 p-3">
+        <div class="font-black text-yellow-800">📷 تصوير البنزين إجباري</div>
+        <div class="small mt-1">يجب تصوير عداد/إيصال البنزين بالكاميرا.</div>
+      </div>
+      <div class="mt-3 rounded-2xl overflow-hidden bg-black relative">
+        <video id="fuelVideo" autoplay playsinline muted class="w-full" style="max-height:360px;object-fit:cover"></video>
+        <div id="cameraLoading" class="absolute inset-0 flex items-center justify-center text-white bg-black/50 font-bold">جاري فتح الكاميرا…</div>
+      </div>
+      <canvas id="fuelCanvas" class="hidden"></canvas>
+      <img id="fuelPreview" class="hiddenx w-full rounded-2xl mt-3" alt="صورة البنزين">
+      <div class="grid grid-cols-2 gap-2 mt-3">
+        <button id="captureFuel" type="button" class="btn btn-dark">📸 التقاط الصورة</button>
+        <button id="retakeFuel" type="button" class="btn btn-gray hiddenx">🔄 إعادة التصوير</button>
+      </div>
+      <div id="cameraError" class="text-red-600 text-sm font-bold mt-2"></div>`;
+    await startFuelCamera();
   };
-  $("exType").dispatchEvent(new Event("change"));
+
+  $("exType").onchange=typeChanged;
+  typeChanged();
+
   $("saveExpense").onclick=async()=>{
     const s=activeShift(),amount=num("exAmount"),type=val("exType");
     if(!s||amount<=0)return toast("راجع الوردية والمبلغ",true);
+    if(type==="بنزين" && !fuelPhotoData){
+      return toast("لا يمكن حفظ مصروف البنزين قبل تصويره بالكاميرا",true);
+    }
     const id=push(ref(db,"expenses")).key;
-    // Store the record first. Image upload can be added to Firebase Storage when Storage rules are enabled.
-    await set(ref(db,"expenses/"+id),{id,shiftId:s.id,driverId:state.driver.id,type,amount,note:val("exNote"),createdAt:now(),personal:type==="مصروف شخصي للسائق"});
+    await set(ref(db,"expenses/"+id),{
+      id,shiftId:s.id,driverId:state.driver.id,type,amount,note:val("exNote"),createdAt:now(),
+      personal:type==="مصروف شخصي للسائق",
+      ...(type==="بنزين"?{fuelPhoto:fuelPhotoData,fuelPhotoTakenAt:now()}: {})
+    });
     closeModal();toast("تم تسجيل المصروف");render();
   };
+}
+
+async function startFuelCamera(){
+  const video=$("fuelVideo"),loading=$("cameraLoading"),err=$("cameraError");
+  if(!video)return;
+  try{
+    fuelCameraStream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},
+      audio:false
+    });
+    video.srcObject=fuelCameraStream;
+    await video.play();
+    loading?.classList.add("hiddenx");
+    $("captureFuel").onclick=captureFuelPhoto;
+    $("retakeFuel").onclick=async()=>{
+      fuelPhotoData="";
+      $("fuelPreview").classList.add("hiddenx");
+      $("captureFuel").classList.remove("hiddenx");
+      $("retakeFuel").classList.add("hiddenx");
+      await startFuelCamera();
+    };
+  }catch(e){
+    loading?.classList.add("hiddenx");
+    if(err) err.textContent="تعذر فتح الكاميرا: "+(e?.message||e);
+    $("captureFuel").disabled=true;
+  }
+}
+
+function captureFuelPhoto(){
+  const video=$("fuelVideo"),canvas=$("fuelCanvas"),preview=$("fuelPreview");
+  if(!video||!canvas||!video.videoWidth)return toast("الكاميرا لم تجهز بعد",true);
+  const maxW=900;
+  const scale=Math.min(1,maxW/video.videoWidth);
+  canvas.width=Math.round(video.videoWidth*scale);
+  canvas.height=Math.round(video.videoHeight*scale);
+  const ctx=canvas.getContext("2d");
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  fuelPhotoData=canvas.toDataURL("image/jpeg",0.72);
+  preview.src=fuelPhotoData;
+  preview.classList.remove("hiddenx");
+  $("captureFuel").classList.add("hiddenx");
+  $("retakeFuel").classList.remove("hiddenx");
+  stopFuelCamera();
+  toast("تم تصوير البنزين بنجاح.");
 }
 
 function endShiftForm(s,revenue,exp,driverPct,net,trips){
@@ -434,7 +505,7 @@ function endShiftForm(s,revenue,exp,driverPct,net,trips){
     <div class="card p-4 mt-3 bg-yellow-50"><span class="small">الباقي للسائق المرحل للتراكمي</span><div id="carry" class="font-black text-xl mt-1">${money(driverPct)}</div></div>
     <button id="confirmEnd" class="btn btn-red w-full mt-5">حفظ وإنهاء الوردية</button>`);
   const updateCarry=()=>{$("carry").textContent=money(Math.max(0,driverPct-num("paidNow")))};
-  $("paidNow").oninput=updateCarry;updateCarry;
+  $("paidNow").oninput=updateCarry;updateCarry();
   $("confirmEnd").onclick=async()=>{
     const paid=Math.max(0,num("paidNow")),carry=Math.max(0,driverPct-paid);
     if(paid>driverPct)return toast("المبلغ المدفوع لا يمكن أن يتجاوز نسبة السائق",true);
@@ -442,7 +513,6 @@ function endShiftForm(s,revenue,exp,driverPct,net,trips){
       status:"مغلقة",endedAt:now(),totalRevenue:revenue,totalExpenses:exp,
       driverPercentage:driverPct,net,paidToDriver:paid,driverCarry:carry
     });
-    // Append a compact archive record. Full trip/expense records remain in their original paths.
     const aid=push(ref(db,"archives")).key;
     await set(ref(db,"archives/"+aid),{id:aid,month:new Date().toISOString().slice(0,7),type:"shift",shiftId:s.id,driverId:state.driver.id,driverName:state.driver.name,totalRevenue:revenue,totalExpenses:exp,driverPercentage:driverPct,net,paidToDriver:paid,driverCarry:carry,archivedAt:now()});
     closeModal();toast("تم إنهاء الوردية وقفلها");render();
@@ -451,7 +521,7 @@ function endShiftForm(s,revenue,exp,driverPct,net,trips){
 
 function renderAccount(){
   const d=state.driver||{};
-  const shifts=vals(state.data.shifts).filter(s=>s.driverId===d.id&&s.status==="مغلقة");
+  const shifts=Object.values(state.data.shifts||{}).filter(s=>s.driverId===d.id&&s.status==="مغلقة");
   const revenue=shifts.reduce((a,s)=>a+Number(s.totalRevenue||0),0);
   const pct=shifts.reduce((a,s)=>a+Number(s.driverPercentage||0),0);
   const paid=shifts.reduce((a,s)=>a+Number(s.paidToDriver||0),0);
@@ -495,21 +565,25 @@ async function changePassword(){
 
 $("loginBtn").onclick=login;
 $("loginPass").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
-$("logoutBtn").onclick=()=>{localStorage.removeItem("goldenFleetDriver");state.driver=null;state.unsub.forEach(u=>u&&u());state.unsub=[];$("appScreen").classList.add("hiddenx");$("loginScreen").classList.remove("hiddenx");$("loginPass").value=""};
+$("reloadDriversBtn").onclick=loadDriversList;
+
+$("logoutBtn").onclick=()=>{
+  localStorage.removeItem("goldenFleetDriver");
+  state.driver=null;
+  state.unsub.forEach(u=>u&&u());
+  state.unsub=[];
+  $("appScreen").classList.add("hiddenx");
+  $("loginScreen").classList.remove("hiddenx");
+  $("loginPass").value="1234";
+  loadDriversList();
+};
+
 document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render()});
 
-$("view").addEventListener("click",e=>{
-  const nav=e.target.closest("[data-nav]"); if(nav){const t=state.data.availableTrips[nav.dataset.nav];if(t)openNavigation(t)}
-  document.querySelectorAll("[data-trip]").forEach(()=>{});
+signInAnonymously(auth).then(()=>restoreLogin()).catch(e=>{
+  console.error(e);
+  loadDriversList();
 });
-
-setInterval(()=>{
-  if(state.view==="available"){
-    vals(state.data.availableTrips).filter(t=>t.status==="متاحة").forEach(t=>updateDistance(t.id));
-  }
-},5000);
-
-signInAnonymously(auth).then(()=>restoreLogin()).catch(e=>console.error(e));
 </script>
 </body>
-  </html>
+</html>
