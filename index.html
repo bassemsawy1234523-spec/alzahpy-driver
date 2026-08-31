@@ -311,8 +311,8 @@ function addNewTripForm(){
     <label class="label mt-3">رقم الهاتف</label><input id="newCustPhone" class="field" placeholder="رقم الهاتف">
     <label class="label mt-3">مكان الإقلاع</label><input id="newPickup" class="field" placeholder="عنوان الإقلاع">
     <div class="grid grid-cols-2 gap-2 mt-2">
-      <input id="newPickupLat" class="field text-xs" placeholder="خط العرض (Latitude) اختيار اختياري">
-      <input id="newPickupLng" class="field text-xs" placeholder="خط الطول (Longitude) اختيار اختياري">
+      <input id="newPickupLat" class="field text-xs" placeholder="خط العرض (Latitude) اختيار">
+      <input id="newPickupLng" class="field text-xs" placeholder="خط الطول (Longitude) اختيار">
     </div>
     <label class="label mt-3">مكان النزول</label><input id="newDrop" class="field" placeholder="عنوان الوصول">
     <label class="label mt-3">قيمة الرحلة (ج)</label><input id="newAmount" class="field" type="number" step="0.01" placeholder="0">
@@ -457,22 +457,30 @@ function renderShift(){
   const expenses = Object.values(state.data.expenses || {}).filter(e => e.shiftId === s.id);
   const revenue = trips.reduce((a,t) => a + Number(t.amount || 0), 0);
   const exp = expenses.reduce((a,e) => a + Number(e.amount || 0), 0);
-  const pct = Number(state.driver.percent ?? state.driver.nisba ?? state.driver.percentage ?? 0);
-  const driverPct = revenue * pct / 100;
-  const net = revenue - exp - driverPct;
+  const net = revenue - exp;
 
   $("view").innerHTML = `<div class="mb-4"><h2 class="text-2xl font-black">ورديتي</h2><p class="small mt-1">وردية رقم ${esc(s.shiftNo||s.id)}</p></div>
   <div class="card p-4 mb-4"><div class="flex justify-between"><div><b>${esc(s.carName||s.carId||"السيارة")}</b><div class="small mt-1">بدأت: ${dateTime(s.startedAt)}</div></div><span class="badge open">مفتوحة</span></div>
   <div class="grid grid-cols-2 gap-3 mt-4">
     <div><span class="small">الإيرادات</span><div class="font-black text-lg">${money(revenue)}</div></div>
     <div><span class="small">المصاريف</span><div class="font-black text-lg">${money(exp)}</div></div>
-    <div><span class="small">نسبة السائق</span><div class="font-black text-lg">${money(driverPct)}</div></div>
-    <div><span class="small">الصافي</span><div class="font-black text-lg">${money(net)}</div></div>
+    <div class="col-span-2"><span class="small">الصافي العام</span><div class="font-black text-xl text-amber-700">${money(net)}</div></div>
   </div></div>
   <div class="grid grid-cols-2 gap-2 mb-4">
     <button id="addExpense" class="btn btn-gray">+ مصروف</button>
-    <button id="endShift" class="btn btn-red">إنهاء الوردية</button>
+    <button id="endShift" class="btn btn-primary">إنهاء الوردية</button>
   </div>
+  <div class="grid grid-cols-1 mb-4">
+    <button id="cancelShiftBtn" class="btn btn-red text-xs">🗑️ حذف/إلغاء هذه الوردية بالكامل</button>
+  </div>
+  <div class="mb-2 font-black text-sm">قائمة المصاريف المسجلة:</div>
+  <div class="space-y-2 mb-4">
+    ${expenses.map(e => `<div class="card p-3 flex justify-between items-center text-sm">
+      <div><b>${esc(e.type)}:</b> ${money(e.amount)} ${e.note ? `(${esc(e.note)})` : ""}</div>
+      <button class="btn btn-red text-xs py-1 px-2" data-delete-expense="${esc(e.id)}">حذف</button>
+    </div>`).join("") || "<div class='small text-gray-500'>لا توجد مصاريف مسجلة.</div>"}
+  </div>
+  <div class="mb-2 font-black text-sm">الرحلات في هذه الوردية:</div>
   <div class="space-y-3">
     ${trips.map(t => {
       const phone = t.customerPhone || "";
@@ -492,37 +500,50 @@ function renderShift(){
   </div>`;
 
   $("addExpense").onclick = expenseForm;
-  $("endShift").onclick = () => endShiftForm(s, revenue, exp, driverPct, net, trips);
+  $("endShift").onclick = () => endShiftForm(s, revenue, exp, net, trips, expenses);
+  $("cancelShiftBtn").onclick = () => cancelShiftCompletely(s, trips);
 
+  $("view").querySelectorAll("[data-delete-expense]").forEach(b => b.onclick = () => deleteExpense(b.dataset.deleteExpense));
   $("view").querySelectorAll("[data-return-trip]").forEach(b => b.onclick = () => returnTripToAvailable(b.dataset.returnTrip, s.id));
   $("view").querySelectorAll("[data-cancel-trip]").forEach(b => b.onclick = () => cancelTripFinal(b.dataset.cancelTrip, s.id));
-
   $("view").querySelectorAll("[data-booked-call]").forEach(b => b.onclick = () => { const phone = b.dataset.bookedCall; if(phone) location.href=`tel:${phone}`; });
   $("view").querySelectorAll("[data-booked-whatsapp]").forEach(b => b.onclick = () => { const phone = b.dataset.bookedWhatsapp; if(phone) window.open(`https://wa.me/${phone.replace(/[^0-9]/g,"")}`,"_blank"); });
+}
+
+async function deleteExpense(expenseId){
+  if(!confirm("هل أنت متأكد من حذف هذا المصروف؟")) return;
+  await set(ref(db, "expenses/" + expenseId), null);
+  toast("تم حذف المصروف بنجاح");
+}
+
+async function cancelShiftCompletely(s, trips){
+  if(!confirm("هل أنت متأكد من حذف ورديتك الحالية وإرجاع جميع رحلاتها إلى المتاحة؟")) return;
+  for(const t of trips){
+    await update(ref(db, "availableTrips/" + t.id), {
+      status: "متاحة", driverId: null, driverName: null, shiftId: null, shiftNo: null, bookedAt: null
+    });
+    await set(ref(db, "trips/" + t.id), null);
+  }
+  await set(ref(db, "shifts/" + s.id), null);
+  toast("تم إلغاء وحذف الوردية بالكامل");
+  render();
 }
 
 async function returnTripToAvailable(tripId, shiftId){
   if(!confirm("هل أنت متأكد من إرجاع الرحلة إلى قائمة الرحلات المتاحة وحذفها من ورديتك؟")) return;
   
   await update(ref(db, "availableTrips/" + tripId), {
-    status: "متاحة",
-    driverId: null,
-    driverName: null,
-    shiftId: null,
-    shiftNo: null,
-    bookedAt: null
+    status: "متاحة", driverId: null, driverName: null, shiftId: null, shiftNo: null, bookedAt: null
   });
-
   await set(ref(db, "trips/" + tripId), null);
   await update(ref(db, "shifts/" + shiftId + "/tripIds"), { [tripId]: null });
-
-  toast("تم إرجاع الرحلة للرحلات المتاحة وحذفها من ورديتك بنجاح");
+  toast("تم إرجاع الرحلة للرحلات المتاحة بنجاح");
 }
 
 async function cancelTripFinal(tripId, shiftId){
   if(!confirm("هل أنت متأكد من إلغاء الرحلة نهائياً؟")) return;
   await update(ref(db, "availableTrips/" + tripId), { status: "ملغية", cancelledAt: now() });
-  await update(ref(db, "trips/" + tripId), { status: "ملغية", cancelledAt: now() });
+  await set(ref(db, "trips/" + tripId), null);
   await update(ref(db, "shifts/" + shiftId + "/tripIds"), { [tripId]: null });
   toast("تم إلغاء الرحلة نهائياً");
 }
@@ -645,30 +666,57 @@ function captureFuelPhoto(){
   toast("تم التقاط صورة العداد بنجاح.");
 }
 
-function endShiftForm(s, revenue, exp, driverPct, net, trips){
+function endShiftForm(s, revenue, exp, net, trips, expenses){
+  const pctValue = Number(state.driver.percent ?? state.driver.nisba ?? state.driver.percentage ?? 0);
+  const grossDriverPct = revenue * pctValue / 100;
+  
+  // حساب المصروف الشخصي للسائق المضاف في هذه الوردية
+  const personalExp = expenses.filter(e => e.type === "مصروف شخصي للسائق" || e.personal).reduce((a,e) => a + Number(e.amount || 0), 0);
+  
+  // صافي نسبة السائق بعد خصم المصروف الشخصي
+  const netDriverPct = Math.max(0, grossDriverPct - personalExp);
+  const shiftNetAfterDriverPct = net - grossDriverPct;
+
   modal(`<h3 class="text-xl font-black">🔒 إنهاء الوردية</h3>
     <div class="grid grid-cols-2 gap-3 mt-4">
       <div class="card p-3"><span class="small">إجمالي الإيرادات</span><b class="block mt-1">${money(revenue)}</b></div>
-      <div class="card p-3"><span class="small">إجمالي المصاريف</span><b class="block mt-1">${money(exp)}</b></div>
-      <div class="card p-3"><span class="small">إجمالي نسبة السائق</span><b class="block mt-1">${money(driverPct)}</b></div>
-      <div class="card p-3"><span class="small">صافي الوردية</span><b class="block mt-1">${money(net)}</b></div>
+      <div class="card p-3"><span class="small">إجمالي المصاريف العامة</span><b class="block mt-1">${money(exp)}</b></div>
+      <div class="card p-3 col-span-2 bg-amber-50 border border-amber-200"><span class="small font-bold text-amber-900">نسبة السائق (كاملة بدون خصم)</span><b class="block mt-1 text-lg text-amber-950">${money(grossDriverPct)}</b></div>
+      <div class="card p-3"><span class="small">المصروف الشخصي للسائق</span><b class="block mt-1 text-red-600">${money(personalExp)}</b></div>
+      <div class="card p-3"><span class="small">صافي الوردية للشركة/المالك</span><b class="block mt-1">${money(shiftNetAfterDriverPct)}</b></div>
     </div>
-    <label class="label mt-5">المبلغ المدفوع الآن للسائق</label>
+    <label class="label mt-5">المبلغ المدفوع الآن للسائق نقداً</label>
     <input id="paidNow" class="field" type="number" step="0.01" value="0">
-    <div class="card p-4 mt-3 bg-yellow-50"><span class="small">الباقي للسائق المرحل للتراكمي</span><div id="carry" class="font-black text-xl mt-1">${money(driverPct)}</div></div>
-    <button id="confirmEnd" class="btn btn-red w-full mt-5">حفظ وإنهاء الوردية</button>`);
-  const updateCarry = () => { $("carry").textContent = money(Math.max(0, driverPct - num("paidNow"))); };
-  $("paidNow").oninput = updateCarry; updateCarry();
+    <div class="card p-4 mt-3 bg-yellow-50"><span class="small">الباقي للسائق المرحل للتراكمي (بعد خصم المصروف الشخصي)</span><div id="carry" class="font-black text-xl mt-1">${money(netDriverPct)}</div></div>
+    <button id="confirmEnd" class="btn btn-primary w-full mt-5">حفظ وإنهاء الوردية</button>`);
+
+  const updateCarry = () => { 
+    const paid = num("paidNow");
+    $("carry").textContent = money(Math.max(0, netDriverPct - paid)); 
+  };
+  $("paidNow").oninput = updateCarry; 
+  updateCarry();
+
   $("confirmEnd").onclick = async () => {
-    const paid = Math.max(0, num("paidNow")), carry = Math.max(0, driverPct - paid);
-    if(paid > driverPct) return toast("المبلغ المدفوع لا يمكن أن يتجاوز نسبة السائق", true);
+    const paid = Math.max(0, num("paidNow")), carry = Math.max(0, netDriverPct - paid);
+    if(paid > netDriverPct) return toast("المبلغ المدفوع لا يمكن أن يتجاوز صافي نسبة السائق", true);
+    
     await update(ref(db, "shifts/" + s.id), {
       status: "مغلقة", endedAt: now(), totalRevenue: revenue, totalExpenses: exp,
-      driverPercentage: driverPct, net, paidToDriver: paid, driverCarry: carry
+      driverPercentage: grossDriverPct, personalExpense: personalExp, netDriverPercentage: netDriverPct,
+      net: shiftNetAfterDriverPct, paidToDriver: paid, driverCarry: carry
     });
+    
     const aid = push(ref(db, "archives")).key;
-    await set(ref(db, "archives/" + aid), {id: aid, month: new Date().toISOString().slice(0,7), type: "shift", shiftId: s.id, driverId: state.driver.id, driverName: state.driver.name, totalRevenue: revenue, totalExpenses: exp, driverPercentage: driverPct, net, paidToDriver: paid, driverCarry: carry, archivedAt: now()});
-    closeModal(); toast("تم إنهاء الوردية وقفلها"); render();
+    await set(ref(db, "archives/" + aid), {
+      id: aid, month: new Date().toISOString().slice(0,7), type: "shift", shiftId: s.id, 
+      driverId: state.driver.id, driverName: state.driver.name, totalRevenue: revenue, 
+      totalExpenses: exp, driverPercentage: grossDriverPct, personalExpense: personalExp, 
+      netDriverPercentage: netDriverPct, net: shiftNetAfterDriverPct, paidToDriver: paid, 
+      driverCarry: carry, archivedAt: now()
+    });
+
+    closeModal(); toast("تم إنهاء الوردية وتحديث الحسابات بنجاح"); render();
   };
 }
 
@@ -677,16 +725,20 @@ function renderAccount(){
   const shifts = Object.values(state.data.shifts || {}).filter(s => s.driverId === d.id && s.status === "مغلقة");
   const revenue = shifts.reduce((a,s) => a + Number(s.totalRevenue || 0), 0);
   const pct = shifts.reduce((a,s) => a + Number(s.driverPercentage || 0), 0);
+  const personalExpTotal = shifts.reduce((a,s) => a + Number(s.personalExpense || 0), 0);
+  const netPct = shifts.reduce((a,s) => a + Number(s.netDriverPercentage || (s.driverPercentage - (s.personalExpense||0)) || 0), 0);
   const paid = shifts.reduce((a,s) => a + Number(s.paidToDriver || 0), 0);
   const carry = shifts.reduce((a,s) => a + Number(s.driverCarry || 0), 0);
+
   $("view").innerHTML = `<h2 class="text-2xl font-black mb-4">حسابي</h2>
   <div class="card p-5">
     <div class="text-center"><div class="w-20 h-20 rounded-full bg-yellow-100 mx-auto flex items-center justify-center text-3xl">👤</div><h3 class="font-black text-xl mt-3">${esc(d.name||"")}</h3><p class="small">${esc(d.phone||"")}</p></div>
     <div class="grid grid-cols-2 gap-3 mt-5">
       <div class="card p-3"><span class="small">إيراداتي</span><b class="block mt-1">${money(revenue)}</b></div>
-      <div class="card p-3"><span class="small">نسبتي</span><b class="block mt-1">${money(pct)}</b></div>
-      <div class="card p-3"><span class="small">المقبوض</span><b class="block mt-1">${money(paid)}</b></div>
-      <div class="card p-3"><span class="small">التراكمي</span><b class="block mt-1">${money(carry)}</b></div>
+      <div class="card p-3"><span class="small">إجمالي نسبتي</span><b class="block mt-1">${money(pct)}</b></div>
+      <div class="card p-3"><span class="small">مصاريفي الشخصية</span><b class="block mt-1 text-red-600">${money(personalExpTotal)}</b></div>
+      <div class="card p-3"><span class="small">المقبوض نقداً</span><b class="block mt-1">${money(paid)}</b></div>
+      <div class="card p-3 col-span-2 bg-yellow-50 border border-yellow-200"><span class="small font-bold text-yellow-900">الرصيد التراكمي للسائق</span><b class="block mt-1 text-xl text-yellow-950">${money(carry)}</b></div>
     </div>
   </div>
   <div class="card p-5 mt-4">
